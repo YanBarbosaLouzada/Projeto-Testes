@@ -1,0 +1,66 @@
+.product-page-header {
+  padding: 32px 24px 0;
+}
+
+.product-page-header h1 {
+  font-family: var(--heading);
+  font-size: 1.8rem;
+  color: var(--text-h);
+  margin: 0 0 6px;
+  letter-spacing: -0.3px;
+}
+
+.product-page-header p {
+  color: var(--text);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.category-list {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 20px 24px;
+}
+
+.product-page-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 80px 24px;
+  color: var(--text);
+  opacity: 0.6;
+  font-size: 15px;
+}
+
+.support-button {
+  position: fixed;
+  left: 24px;
+  bottom: 40px;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.15s ease;
+}
+
+.support-button:hover {
+  background: var(--accent-hover);
+  transform: translateY(-2px);
+}
+
+.support-button svg {
+  display: block;
+}
+

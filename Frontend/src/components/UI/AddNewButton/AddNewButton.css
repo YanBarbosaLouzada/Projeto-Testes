@@ -1,0 +1,64 @@
+.addNewButton {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  background-color: var(--accent);
+  color: #fff;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.8rem;
+  font-weight: 300;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--accent-border);
+  transition: background-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+
+.addNewButton:hover {
+  background-color: var(--accent-hover);
+  transform: scale(1.08);
+  box-shadow: 0 6px 24px var(--accent-border);
+}
+
+.addNewButton-mouse {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  background-color: var(--accent);
+  color: #fff;
+  width: 220px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: var(--sans);
+    cursor: pointer;
+  box-shadow: 0 4px 16px var(--accent-border);
+  animation: slideInFab;
+  user-select: none;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+
+.addNewButton-mouse:hover {
+  background-color: var(--accent-hover);
+  box-shadow: 0 6px 24px var(--accent-border);
+}
+
+@keyframes slideInFab {
+  from {
+    right: -200px;
+    opacity: 0;
+  }
+  to {
+    right: 32px;
+    opacity: 1;
+  }
+}

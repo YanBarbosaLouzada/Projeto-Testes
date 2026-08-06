@@ -1,0 +1,9 @@
+/* ChatPage.css */
+.chat-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--surface);
+}
