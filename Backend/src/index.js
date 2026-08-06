@@ -12,8 +12,6 @@ import {createServer} from 'http';
 import { Server } from 'socket.io';
 
 
-
-
 const __filename = fileURLToPath(import.meta.url); // Converte a URL do módulo atual para um caminho de arquivo
 const __dirname = dirname(__filename); // Obtém o diretório do arquivo atual
 
