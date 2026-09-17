@@ -821,14 +821,43 @@ Entender a diferença entre integração e sistema, e testar o Mynds **rodando d
 
 ### 6.2 Preparando um ambiente de sistema com Docker
 
-`Backend/docker-compose.test.yml`:
+O serviço `backend` do Compose usa `build: .`, ou seja, ele espera encontrar um `Dockerfile` na raiz de `Backend/`. **Esse arquivo ainda não existe no projeto** — é a primeira coisa a criar nesta aula, senão o `docker compose up` falha com `failed to read dockerfile: open Dockerfile: no such file or directory`.
+
+`Backend/Dockerfile`:
+
+```dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY . .
+
+EXPOSE 4444
+
+CMD ["node", "src/server.js"]
+```
+
+`Backend/.dockerignore` (evita copiar `node_modules` do host para dentro da imagem, deixando o build mais rápido e a imagem mais leve):
+
+```text
+node_modules
+npm-debug.log
+.env
+```
+
+> **Ponto pedagógico:** `COPY package*.json ./` seguido de `RUN npm install` **antes** de `COPY . .` é proposital — o Docker cacheia cada instrução (*layer*). Enquanto o `package.json` não mudar, o `npm install` não roda de novo nos próximos builds, mesmo que o código-fonte mude. Inverter essa ordem (copiar tudo antes de instalar) faz o Docker reinstalar as dependências a cada alteração de código, o que é bem mais lento.
+
+Agora sim, o `Backend/docker-compose.test.yml`:
 
 ```yaml
 services:
   mongo:
     image: mongo:7
     ports:
-      - "27018:27017"
+      - "27017:27017"
 
   backend:
     build: .
@@ -841,6 +870,8 @@ services:
     depends_on:
       - mongo
 ```
+
+Rodando (a partir da pasta `Backend/`):
 
 ```bash
 docker compose -f docker-compose.test.yml up -d
