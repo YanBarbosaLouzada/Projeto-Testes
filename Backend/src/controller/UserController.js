@@ -1,6 +1,7 @@
 import {User} from "../models/user.js"
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { senhasConferem, validarEmail, validarIdade } from "../validators/UserValidators.js";
 
 export default class UserController {
   static async LoginUser(req,res){
@@ -31,8 +32,14 @@ export default class UserController {
   static async RegisterUser(req,res) {
     const {name,age,email,password,confirmPassword} = req.body;
 
-    if (confirmPassword !== password){
+    if (!senhasConferem(password, confirmPassword)){
       return res.status(400).json({message:"As senhas são diferentes!"})
+    }
+    if(!validarEmail(email)){
+      return res.status(400).json({message:"Email inválido!"})
+    }
+    if(!validarIdade(age)){
+      return res.status(400).json({message:"Idade inválida!"})
     }
 
     try{
