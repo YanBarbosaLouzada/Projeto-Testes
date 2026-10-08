@@ -948,6 +948,8 @@ Escrever um teste de sistema que sobe o Docker Compose, espera o backend respond
 ### Objetivo da aula
 Entender que **funcionar corretamente** e **funcionar sob uso real** são coisas diferentes — e aprender a medir a segunda.
 
+> **Por que "funcional" de carga?** Na classificação clássica, teste de carga é um teste **não funcional** (mede *quão bem*, não *o quê*). Nesta aula juntamos as duas coisas no mesmo script: os `check`s verificam a parte **funcional** ("a resposta está certa?") e os `thresholds` verificam a parte de **carga** ("ela continua certa *e rápida* com 20, 50, 100 usuários ao mesmo tempo?").
+
 ### 7.1 Vocabulário de performance
 
 | Termo | O que significa |
@@ -956,14 +958,71 @@ Entender que **funcionar corretamente** e **funcionar sob uso real** são coisas
 | **Teste de estresse** | Aumenta a carga além do esperado, para descobrir o ponto de ruptura |
 | **Teste de pico (spike)** | Uma explosão repentina de requisições (ex: liquidação) |
 | **Teste de resistência (soak)** | Carga moderada por um tempo longo, para achar vazamentos de memória |
+| **VU (Virtual User)** | Um "usuário virtual": um laço que executa a função `default` do script repetidamente, do início ao fim |
+| **Iteração** | Uma execução completa da função `default` por um VU |
+| **`stages`** | Degraus de carga ao longo do tempo ("suba até 20 VUs em 30s, mantenha por 1 min, desça") |
+| **Think time (`sleep`)** | Pausa entre ações, imitando o tempo que um usuário real leva para ler/clicar. Sem ela, cada VU dispara requisições sem parar — isso é outro tipo de teste |
 | **p95 / p99** | 95% (ou 99%) das requisições foram respondidas em até X ms — melhor métrica que "média", porque não esconde os piores casos |
 | **RPS** | Requests Per Second — quantas requisições o sistema processa por segundo |
 
+> **Conta rápida para fazer na lousa:** 20 VUs, cada um fazendo 1 requisição e depois `sleep(1)` → aproximadamente **20 RPS**. Se o servidor demorar 500ms para responder, cada iteração passa a levar 1,5s e o RPS cai para ~13. Ou seja: **servidor lento reduz o RPS**, e é assim que a lentidão aparece no resultado.
+
+**`check` × `threshold` — a diferença mais importante do k6:**
+
+| | `check` | `threshold` |
+|---|---|---|
+| O que é | Uma asserção sobre **uma** resposta (`status é 200?`) | Uma meta sobre o **conjunto** de todas as respostas (`p(95) < 300ms`) |
+| Se falhar | Só é contabilizado no resumo (`checks: 97%`) — **o teste continua e o k6 termina com sucesso** | O k6 termina com **exit code ≠ 0** — ou seja, "o teste reprovou" |
+| Uso típico | Validar o conteúdo da resposta | Critério de aprovação do teste (é o que o CI da Aula 8.5.3 usa) |
+
+Por isso, todo script desta aula tem um threshold `checks: ["rate>0.99"]`: ele transforma "check falhou demais" em "teste reprovado".
+
 ### 7.2 Instalando o k6
 
-O [k6](https://k6.io/) é uma ferramenta de linha de comando (não é pacote npm do projeto, é um binário separado). Instale conforme o SO do aluno (Windows: `choco install k6` ou `winget install k6`; Mac: `brew install k6`).
+O [k6](https://k6.io/) é uma ferramenta de linha de comando (não é pacote npm do projeto, é um binário separado):
 
-### 7.3 Script de carga contra `GET /products/`
+- **Windows:** `winget install k6 --source winget` ou `choco install k6`
+- **Mac:** `brew install k6`
+- **Linux:** seguir o guia oficial (pacote `.deb`/`.rpm`)
+
+Confira a instalação:
+
+```bash
+k6 version
+```
+
+**Alternativa sem instalar nada (usando o Docker da Aula 6):**
+
+```bash
+docker run --rm -i -e BASE_URL=http://host.docker.internal:4444 grafana/k6 run - < load-tests/listar-produtos.js
+```
+
+> ⚠️ De dentro de um container, `localhost` é o **próprio container**, não a sua máquina. Por isso usamos `host.docker.internal` (Windows/Mac). No Linux, acrescente `--add-host=host.docker.internal:host-gateway`.
+
+### 7.3 Preparando o ambiente (antes de rodar qualquer carga)
+
+> 🚨 **Regra de ouro:** teste de carga **nunca** roda contra produção nem contra o banco compartilhado de desenvolvimento (`myndscluster` no Atlas). Ele cria dados e **estressa o servidor de propósito** — rodar contra um ambiente real é, na prática, atacar o seu próprio sistema.
+
+Use o mesmo ambiente isolado da Aula 6 (a partir de `Backend/`):
+
+```bash
+docker compose -f docker-compose.test.yml up -d --build
+```
+
+Isso sobe a API em `http://localhost:4444` com um MongoDB descartável. Para zerar os dados entre uma rodada e outra:
+
+```bash
+docker compose -f docker-compose.test.yml down
+docker compose -f docker-compose.test.yml up -d
+```
+
+> **Por que não `npm run dev`?** O `server.js` lê `PORT` e `dbUrl` do `.env` (sem `PORT`, a API sobe na porta **8000**, não na 4444). O `.env` de desenvolvimento aponta para o banco real — exatamente o que não queremos aqui. O Compose já define `PORT=4444` e um `dbUrl` isolado.
+
+**Organização dos arquivos:** os scripts ficam em `Backend/load-tests/` e **não** podem terminar em `.test.js`. O `jest.config.js` usa `testMatch: ["**/*.test.js"]` — se o nome bater, o Jest tenta rodar o script, encontra `import http from "k6/http"` (que só existe dentro do k6) e quebra toda a suíte.
+
+### 7.4 Script de carga contra `GET /products/`
+
+Antes de medir, precisamos de **dados**. `GET /products/` faz `Product.find()` sem paginação (`ProductController.js:5`) — contra um banco vazio, a resposta é instantânea e o resultado não significa nada. A função `setup()` do k6 roda **uma única vez, antes dos VUs começarem**, e é o lugar certo para popular o banco.
 
 `Backend/load-tests/listar-produtos.js`:
 
@@ -971,37 +1030,77 @@ O [k6](https://k6.io/) é uma ferramenta de linha de comando (não é pacote npm
 import http from "k6/http";
 import { check, sleep } from "k6";
 
+const BASE_URL = __ENV.BASE_URL || "http://localhost:4444";
+const VUS = Number(__ENV.VUS || 20);
+const QTD_PRODUTOS = Number(__ENV.PRODUTOS || 200);
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
 export const options = {
   stages: [
-    { duration: "30s", target: 20 },   // sobe gradualmente até 20 usuários simultâneos
-    { duration: "1m", target: 20 },    // mantém 20 usuários por 1 minuto
-    { duration: "10s", target: 0 },    // desce a carga
+    { duration: "30s", target: VUS },   // sobe gradualmente até VUS usuários simultâneos
+    { duration: "1m", target: VUS },    // mantém a carga por 1 minuto
+    { duration: "10s", target: 0 },     // desce a carga
   ],
   thresholds: {
     http_req_duration: ["p(95)<300"],   // 95% das respostas devem vir em menos de 300ms
     http_req_failed: ["rate<0.01"],     // menos de 1% de erro
+    checks: ["rate>0.99"],              // mais de 99% dos checks devem passar
   },
 };
 
+// Roda UMA vez, antes da carga: cria um usuário e popula o banco com produtos.
+export function setup() {
+  const email = `seed-${Date.now()}@mynds.com`;
+  http.post(`${BASE_URL}/auth/register`, JSON.stringify({
+    name: "Seed Carga", age: 30, email, password: "123456", confirmPassword: "123456",
+  }), { headers: JSON_HEADERS });
+
+  const login = http.post(`${BASE_URL}/auth/login`,
+    JSON.stringify({ email, password: "123456" }), { headers: JSON_HEADERS });
+  const token = login.json("token");
+
+  for (let i = 0; i < QTD_PRODUTOS; i++) {
+    http.post(`${BASE_URL}/products/create-product`, JSON.stringify({
+      name: `Produto ${i}`, mark: "Mynds", color: "Azul",
+      description: "Gerado pelo setup do k6", price: 10 + i, type: "outros",
+    }), { headers: { ...JSON_HEADERS, authorization: token } });
+  }
+}
+
 export default function () {
-  const resposta = http.get("http://localhost:4444/products/");
+  const resposta = http.get(`${BASE_URL}/products/`);
 
   check(resposta, {
     "status é 200": (r) => r.status === 200,
-    "corpo tem a lista de produtos": (r) => JSON.parse(r.body).products !== undefined,
+    "corpo tem a lista de produtos": (r) => {
+      try {
+        return Array.isArray(r.json("products"));
+      } catch (e) {
+        return false; // resposta não era JSON (ex: página de erro 500)
+      }
+    },
   });
 
   sleep(1);
 }
 ```
 
-Rodando (com o backend no ar):
+Rodando (com o ambiente da 7.3 no ar):
 
 ```bash
 k6 run load-tests/listar-produtos.js
+# mudando a carga sem editar o arquivo:
+k6 run -e VUS=50 -e PRODUTOS=1000 load-tests/listar-produtos.js
 ```
 
-### 7.4 Script de carga simulando login (fluxo com autenticação)
+**Pontos para explicar:**
+- `__ENV.X` lê variáveis passadas com `-e X=valor`. Assim o mesmo script serve para 5, 20 ou 50 VUs — e para outro servidor (`-e BASE_URL=...`).
+- O `try/catch` no check existe porque, sob carga, o servidor pode devolver um erro que **não é JSON**. Sem ele, o check lançaria uma exceção em vez de simplesmente marcar "falhou".
+- Os requests feitos no `setup()` também entram nas métricas do resumo. Para uma medição "limpa", o ideal é popular o banco num passo separado — mas aqui a simplicidade vale mais.
+
+### 7.5 Script de carga com autenticação (login → criar produto)
+
+Aqui simulamos um fluxo real: o usuário faz login e **usa o token** para criar um produto. O `setup()` cria o usuário e **devolve** dados; o que ele retorna chega como parâmetro (`data`) na função `default` de todos os VUs.
 
 `Backend/load-tests/fluxo-login.js`:
 
@@ -1009,55 +1108,156 @@ k6 run load-tests/listar-produtos.js
 import http from "k6/http";
 import { check, sleep } from "k6";
 
+const BASE_URL = __ENV.BASE_URL || "http://localhost:4444";
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
 export const options = {
   vus: 10,          // 10 "usuários virtuais" simultâneos
   duration: "30s",
+  thresholds: {
+    // uma meta por rota, usando a tag "name" definida em cada request
+    "http_req_duration{name:login}": ["p(95)<800"],
+    "http_req_duration{name:criar-produto}": ["p(95)<300"],
+    http_req_failed: ["rate<0.01"],
+    checks: ["rate>0.99"],
+  },
 };
 
-export default function () {
-  const payload = JSON.stringify({ email: "carga@mynds.com", password: "123456" });
-  const headers = { headers: { "Content-Type": "application/json" } };
+// Dados de teste PREPARADOS: criados uma vez, antes da carga.
+export function setup() {
+  const email = `carga-${Date.now()}@mynds.com`;
+  const registro = http.post(`${BASE_URL}/auth/register`, JSON.stringify({
+    name: "Usuario Carga", age: 25, email, password: "123456", confirmPassword: "123456",
+  }), { headers: JSON_HEADERS });
 
-  const login = http.post("http://localhost:4444/auth/login", payload, headers);
+  if (registro.status !== 200) {
+    throw new Error(`Não consegui criar o usuário de carga: ${registro.status} ${registro.body}`);
+  }
+  return { email, password: "123456" };
+}
 
-  check(login, {
-    "login respondeu": (r) => r.status === 200 || r.status === 401 || r.status === 404,
+export default function (data) {
+  const login = http.post(`${BASE_URL}/auth/login`,
+    JSON.stringify({ email: data.email, password: data.password }),
+    { headers: JSON_HEADERS, tags: { name: "login" } });
+
+  const logou = check(login, {
+    "login retornou 200": (r) => r.status === 200,
+    "login devolveu token": (r) => !!r.json("token"),
+  });
+  if (!logou) return; // sem token não faz sentido continuar o fluxo
+
+  // Dados GERADOS NA HORA: cada iteração cria um produto diferente.
+  const criar = http.post(`${BASE_URL}/products/create-product`, JSON.stringify({
+    name: `Produto VU${__VU}-${__ITER}`, price: 50, type: "outros",
+  }), {
+    headers: { ...JSON_HEADERS, authorization: login.json("token") }, // sem "Bearer": é o que o authenticateToken espera
+    tags: { name: "criar-produto" },
+  });
+
+  check(criar, {
+    "produto criado (200)": (r) => r.status === 200,
   });
 
   sleep(1);
 }
 ```
 
-> **Nota didática:** para esse script funcionar de verdade retornando `200`, é preciso ter criado o usuário `carga@mynds.com` antes (por exemplo, num script de "setup" do próprio k6, usando a função `export function setup() { ... }`). Aproveite para explicar a diferença entre **dados de teste preparados** e **dados gerados na hora**.
+**Pontos para explicar:**
+- **Dados preparados × dados gerados na hora:** o usuário é *preparado* no `setup()` (todos os VUs usam o mesmo login); os produtos são *gerados na hora* (`__VU` = número do VU, `__ITER` = número da iteração, garantindo nomes únicos).
+- O `check` agora exige **200**. Um check que aceita `200 || 401 || 404` passaria mesmo se o usuário não existisse — um teste que sempre passa não testa nada.
+- `authorization: token`, **sem** `Bearer`: o `authenticateToken` (`UserController.js`) passa o header inteiro direto para o `jwt.verify`.
+- **Por que o login tem uma meta mais folgada (800ms) que criar produto (300ms)?** O login roda `bcrypt.compare` com custo 10 — é **propositalmente lento** e pesado para a CPU (é isso que dificulta ataques de força bruta). Cada rota precisa da sua própria meta: um único `p(95)<300` para tudo reprovaria o login injustamente ou esconderia lentidão nas outras rotas. Rode o script e mostre ao aluno a diferença entre as duas linhas no resumo.
 
-### 7.5 Lendo o resultado do k6
+### 7.6 Outros perfis de carga: estresse, pico e resistência
 
-O k6 imprime um resumo assim:
+O mesmo script vira outro tipo de teste trocando só os `stages`:
+
+```js
+// Estresse: degraus crescentes até achar o ponto de ruptura
+stages: [
+  { duration: "1m", target: 20 },
+  { duration: "1m", target: 50 },
+  { duration: "1m", target: 100 },
+  { duration: "1m", target: 200 },
+  { duration: "30s", target: 0 },
+],
+
+// Pico (spike): explosão repentina e volta ao normal
+stages: [
+  { duration: "10s", target: 5 },
+  { duration: "10s", target: 150 },  // liquidação começou!
+  { duration: "1m", target: 150 },
+  { duration: "10s", target: 5 },
+],
+
+// Resistência (soak): carga moderada por muito tempo
+stages: [
+  { duration: "2m", target: 20 },
+  { duration: "2h", target: 20 },    // observe a memória do processo durante o teste
+  { duration: "2m", target: 0 },
+],
+```
+
+> Em aula, rode só o de **pico** (≈ 1min30). O de estresse mostra *onde* o sistema quebra — observe em que degrau o `http_req_failed` começa a subir. O de resistência fica como leitura: ele só faz sentido com horas de execução e acompanhando a memória (`docker stats`).
+
+### 7.7 Lendo o resultado do k6
+
+Ao final, o k6 imprime um resumo parecido com este (o layout exato muda um pouco entre versões):
 
 ```
-http_req_duration..............: avg=45.2ms  p(95)=120ms
-http_req_failed.................: 0.00%
-http_reqs.......................: 1200   40/s
+     ✓ status é 200
+     ✓ corpo tem a lista de produtos
+
+   ✓ checks.........................: 100.00% 2400 out of 2400
+     data_received..................: 38 MB   380 kB/s
+     http_req_duration..............: avg=45.2ms min=3.1ms med=38.4ms max=410ms p(90)=95ms p(95)=120ms
+   ✓ http_req_failed................: 0.00%   0 out of 1402
+     http_reqs......................: 1402    13.9/s
+     iteration_duration.............: avg=1.04s  min=1s   med=1.03s  max=1.41s
+     iterations.....................: 1200    11.9/s
+     vus............................: 1       min=1  max=20
 ```
+
+O `✓`/`✗` à esquerda de uma métrica indica se o **threshold** dela passou. Se algum threshold falhar, o k6 mostra `✗`, imprime `thresholds on metrics '...' have been crossed` e termina com exit code ≠ 0.
 
 Discuta com o aluno:
-- `avg` sozinho **esconde problemas** (um usuário lento pode "sumir" na média). Sempre olhar `p(95)`/`p(99)`.
-- `http_req_failed` alto é sinal de que o sistema está derrubando requisições sob carga — geralmente por esgotamento de conexões com o banco.
-- Aqui é o momento de conectar com a Aula 5: o `mongoose.connect()` do projeto (`Backend/src/config/database.js`) não configura um **pool de conexões** explícito — ótimo gancho para uma discussão sobre configuração de performance.
+- `avg` sozinho **esconde problemas** (um usuário lento pode "sumir" na média). Sempre olhar `p(95)`/`p(99)` e o `max`.
+- `http_reqs` (1402) é maior que `iterations` (1200) porque as 202 requisições do `setup()` (cadastro + login + 200 produtos) também entram na conta.
+- `http_req_failed` alto é sinal de que o sistema está derrubando requisições sob carga — muitas vezes por esgotamento de conexões com o banco.
+- **Gancho sobre o pool de conexões:** o `mongoose.connect()` do projeto (`Backend/src/config/database.js`) não configura o pool **explicitamente** — então o driver usa o padrão (`maxPoolSize: 100`). Com mais requisições simultâneas que conexões disponíveis, as excedentes **esperam na fila**, e isso aparece como aumento do `p(95)`. Experimento para a aula: rodar o teste de estresse com `mongoose.connect(dbUrl, { maxPoolSize: 5 })` e comparar.
+
+**Guardando o resultado para o relatório:**
+
+```bash
+k6 run -e VUS=5  --summary-export=resultado-5vus.json  load-tests/listar-produtos.js
+k6 run -e VUS=50 --summary-export=resultado-50vus.json load-tests/listar-produtos.js
+```
+
+O arquivo `.json` tem todas as métricas do resumo (inclusive `p(95)`), prontas para comparar.
 
 ### Tarefa de casa da Aula 7
-Rodar o teste de carga contra `/products/` primeiro com 5 usuários virtuais, depois com 50, e comparar o `p(95)` — documentando a diferença num pequeno relatório.
+Com o ambiente da 7.3 no ar, rodar `listar-produtos.js` com `-e VUS=5` e depois com `-e VUS=50` (exportando com `--summary-export`), e comparar `p(95)`, `http_req_failed` e `http_reqs/s` num pequeno relatório. Bônus: repetir com `-e PRODUTOS=2000` e explicar por que uma rota sem paginação fica mais lenta conforme o banco cresce.
 
 ---
 
 ## Aula 8 — Cobertura de Código (Coverage) no Backend
 
 ### Objetivo da aula
-Aprender a medir **quanto do código-fonte é executado pelos testes**, interpretar esse número corretamente (e entender suas armadilhas).
+Aprender a medir **quanto do código-fonte é executado pelos testes**, interpretar esse número corretamente (e entender suas armadilhas), e fazer tudo isso rodar sozinho a cada `push` com CI.
 
 ### 8.1 O que o coverage mede (e o que ele NÃO mede)
 
-Cobertura de código conta **linhas, ramos (`if/else`), funções e statements** que foram executados durante os testes. Ela **não** garante que os testes verificaram o resultado certo — só que aquele código *rodou*.
+Cobertura de código conta quatro coisas que foram executadas durante os testes:
+
+| Métrica | O que conta |
+|---|---|
+| **Statements** | Instruções executadas |
+| **Branches** | Caminhos de decisão: cada `if` foi testado no lado verdadeiro **e** no falso? |
+| **Functions** | Funções que foram chamadas pelo menos uma vez |
+| **Lines** | Linhas executadas |
+
+Ela **não** garante que os testes verificaram o resultado certo — só que aquele código *rodou*.
 
 > Exemplo clássico para discutir em aula: um teste sem nenhum `expect()` dá 100% de cobertura na função testada e **zero** de garantia de qualidade. Cobertura é uma métrica de *risco*, não de *qualidade*.
 
@@ -1073,7 +1273,25 @@ Isso gera:
 - Um resumo no terminal.
 - Uma pasta `coverage/` com relatório HTML navegável (`coverage/lcov-report/index.html`).
 
-### 8.3 Configurando metas mínimas (thresholds)
+Adicione `coverage/` ao `Backend/.gitignore` — é um arquivo gerado, não vai para o repositório:
+
+```text
+/node_modules
+/.env
+/coverage
+```
+
+> 🧨 **Primeiro problema real (e ótimo para a aula):** se você já fez a Aula 6, provavelmente viu isto:
+>
+> ```
+> ● [Sistema] Fluxo de cadastro e listagem de produtos › o sistema completo responde no ar (smoke test)
+>     TypeError: fetch failed
+> Test Suites: 1 failed, 9 passed, 10 total
+> ```
+>
+> O `testMatch: ["**/*.test.js"]` pega **todos** os `.test.js` do projeto — inclusive `system-tests/api.system.test.js`, que precisa do servidor no ar (Aula 6). Os testes de sistema têm que ficar **fora** do `npm test`, senão o comando falha em qualquer máquina (e no CI) que não tenha o Docker de pé. Resolvemos isso na 8.3 com `testPathIgnorePatterns`.
+
+### 8.3 Configurando o coverage e as metas mínimas (thresholds)
 
 Em `jest.config.js`:
 
@@ -1082,11 +1300,19 @@ export default {
   testEnvironment: "node",
   transform: {},
   testMatch: ["**/*.test.js"],
+  testPathIgnorePatterns: [
+    "/node_modules/",
+    "/system-tests/",          // testes de sistema rodam à parte, com o servidor no ar (Aula 6)
+  ],
   setupFiles: ["dotenv/config"],
+  coverageProvider: "v8",      // mede a cobertura usando o próprio motor do Node (ver explicação abaixo)
   collectCoverageFrom: [
     "src/**/*.js",
+    "!src/**/*.test.js",       // o próprio teste não conta como código coberto
     "!src/server.js",          // não faz sentido medir cobertura do "boot" do servidor
-    "!src/functions/**",       // já cobrimos manualmente, opcional excluir exemplos didáticos
+    "!src/index.js",           // versão antiga, 100% comentada (Aula 1.2)
+    "!src/test-utils/**",      // ferramentas de teste, não código de produção
+    "!src/functions/**",       // exemplos didáticos da Aula 1 (opcional excluir)
   ],
   coverageThreshold: {
     global: {
@@ -1099,28 +1325,72 @@ export default {
 };
 ```
 
-Se a cobertura cair abaixo desses números, `npm run test:coverage` **falha** — isso é usado depois em CI (Aula 8 e 16 fecham esse assunto) para impedir merges que reduzam a qualidade do projeto.
+E, em `package.json`, um script separado para os testes de sistema (a opção `--testPathIgnorePatterns` na linha de comando **substitui** a do config, liberando a pasta `system-tests/`):
+
+```json
+"test:system": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathIgnorePatterns=/node_modules/ system-tests"
+```
+
+**Explicando as opções novas:**
+
+- **`coverageProvider: "v8"`** — o Jest tem dois jeitos de medir cobertura. O padrão (`"babel"`) reescreve o código com o Babel para inserir contadores; como este projeto usa ESM nativo sem Babel (`transform: {}`, Aula 1), essa medição fica **imprecisa** — especialmente nos arquivos importados com `jest.unstable_mockModule` (Aula 3), que podem aparecer com 0% mesmo tendo sido testados. O `"v8"` usa os contadores que o próprio Node já tem e funciona bem com ESM.
+- **`collectCoverageFrom`** — **sem** ele, o Jest só mostra no relatório os arquivos que algum teste **importou**. Um arquivo que nenhum teste toca simplesmente **não aparece** — e o relatório parece melhor do que a realidade. Com ele, todo arquivo de `src/` entra na conta, mesmo que com 0%.
+- **`coverageThreshold`** — se a cobertura cair abaixo desses números, `npm run test:coverage` **falha** (exit code ≠ 0), **mesmo que todos os testes tenham passado**. É isso que o CI (8.5) usa para impedir merges que reduzam a qualidade do projeto.
 
 ### 8.4 Lendo o relatório
 
-No terminal, aparece algo como:
+Rodando `npm run test:coverage` com a configuração acima, no estado atual do projeto:
 
 ```
---------------------|---------|----------|---------|---------|-------------------
-File                | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
---------------------|---------|----------|---------|---------|-------------------
-All files           |   82.35 |    66.66 |   85.71 |   82.35 |
- UserController.js  |   90.00 |    75.00 |  100.00 |   90.00 | 63-64
- ProductController.js|  70.58 |    50.00 |   75.00 |   70.58 | 29-30,47
---------------------|---------|----------|---------|---------|-------------------
+------------------------|---------|----------|---------|---------|-------------------------------------
+File                    | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+------------------------|---------|----------|---------|---------|-------------------------------------
+All files               |   58.39 |    65.62 |      40 |   58.39 |
+ src                    |     100 |      100 |     100 |     100 |
+  app.js                |     100 |      100 |     100 |     100 |
+ src/config             |       0 |        0 |       0 |       0 |
+  database.js           |       0 |        0 |       0 |       0 | 1-15
+ src/controller         |   50.61 |    57.89 |   33.33 |   50.61 |
+  ProductController.js  |   21.15 |      100 |       0 |   21.15 | 5-7,10-23,26-45,48-51
+  UserController.js     |   83.52 |     62.5 |     100 |   83.52 | 27-29,36-37,39-40,42-43,65-67,81-82
+  cadastro.js           |       0 |        0 |       0 |       0 | 1-20
+  primeiroController.js |       0 |        0 |       0 |       0 | 1-5
+ src/models             |     100 |      100 |     100 |     100 |
+ src/router             |   54.76 |       50 |       0 |   54.76 |
+  ProductRouter.js      |     100 |      100 |     100 |     100 |
+  UserRouter.js         |     100 |      100 |     100 |     100 |
+  cadastro.js           |       0 |        0 |       0 |       0 | 1-11
+  primeiroRouter.js     |       0 |        0 |       0 |       0 | 1-8
+ src/validators         |     100 |      100 |     100 |     100 |
+------------------------|---------|----------|---------|---------|-------------------------------------
+Jest: Coverage for statements (58.39%) does not meet "global" threshold (70%)
+Jest: Coverage for lines (58.39%) does not meet "global" threshold (70%)
+Jest: Coverage for functions (40%) does not meet "global" threshold (70%)
+
+Tests:       20 passed, 20 total
 ```
+
+> Os números da sua turma vão variar conforme os testes que cada aluno escreveu nas Aulas 2 a 5 — o importante é saber **ler** a tabela.
 
 Explique ao aluno:
 - **% Stmts** (statements): % de instruções executadas.
 - **% Branch**: % de caminhos de decisão testados (o `if` foi testado nos dois sentidos — verdadeiro *e* falso?).
 - **Uncovered Line #s**: aponta exatamente quais linhas nunca rodaram — é o melhor lugar para decidir o próximo teste a escrever.
+- **Todos os 20 testes passaram, mas o comando falhou.** É o threshold funcionando: "os testes que existem estão verdes" é diferente de "existem testes suficientes".
 
-No exemplo acima, `ProductController.js` linha 29-30 é o `if (!product) { return... }` do `editProduct` — sinal de que falta um teste para "editar produto inexistente" (a mesma tarefa de casa da Aula 5!).
+**Transformando o relatório em lista de tarefas** (é exatamente o exercício da tarefa final):
+
+| Linhas descobertas | O que é no código | Teste que resolve |
+|---|---|---|
+| `UserController.js` 36-43 | as três validações do `RegisterUser` (senhas diferentes, e-mail inválido, idade inválida → 400) | unidade (Aula 3) ou integração (Aula 4) enviando cada dado inválido |
+| `UserController.js` 27-29 e 65-67 | os `catch` que devolvem 500 | unidade com mock fazendo `User.findOne`/`save` lançar erro (`mockRejectedValue`) |
+| `UserController.js` 81-82 | `jwt.verify` falhando → 403 "Token Inválido" | enviar um token adulterado |
+| `ProductController.js` 29-31 | o `if (!product)` do `editProduct` | "editar produto inexistente" — a tarefa de casa da Aula 5! |
+| `ProductController.js` (quase todo) | `getAllProducts`, `createdProduct`, `deleteProduct` | fluxo completo da Aula 5.1 ou testes de unidade com o mock de `Product` já pronto em `ProductController.test.js` |
+
+**E os arquivos com 0%?** `cadastro.js`, `primeiroController.js` e `primeiroRouter.js` são exemplos das primeiras aulas do projeto e **não estão ligados ao `app.js`** — nenhuma rota chega neles. É **código morto**. Isso só apareceu porque configuramos o `collectCoverageFrom`. A decisão certa aqui não é escrever testes para eles, e sim **apagá-los** (ou, se forem mantidos como material didático, excluí-los do coverage com `"!src/**/primeiro*.js"` e deixar isso documentado). Já o `config/database.js` é infraestrutura: quem o exercita são os testes de sistema da Aula 6 — é aceitável excluí-lo também, desde que o time saiba disso.
+
+> **Discussão:** excluir arquivos do coverage é legítimo, mas pode virar "maquiagem" do número. Regra prática: só exclua o que for testado **de outro jeito** (sistema/E2E) ou o que **não é código de produção**, e sempre com um comentário explicando o porquê.
 
 ### 8.5 CI/CD: rodando os testes do Backend automaticamente (GitHub Actions)
 
@@ -1128,20 +1398,31 @@ Até aqui, todo teste foi rodado **manualmente**, pela mão do aluno, no termina
 
 > **CI × CD, a diferença:** **CI (Continuous Integration)** é a parte que valida o código (lint, testes, build) a cada mudança. **CD (Continuous Delivery/Deployment)** é o passo seguinte, que pega um código já validado pelo CI e **publica** automaticamente (ex: sobe a nova versão da API num servidor). Nesta aula fechamos o CI do Backend; o CD (deploy) é discutido como extensão opcional ao final da Aula 16.
 
+#### 8.5.0 Pré-requisitos (senão o CI quebra no primeiro passo)
+
+1. **O `package-lock.json` precisa estar no repositório.** O `npm ci` (usado no CI) **se recusa a rodar** sem ele, e o cache do `setup-node` também depende dele. Confira o `Backend/.gitignore`: se houver uma linha `/package-lock.json`, **remova-a** e faça commit do arquivo:
+   ```bash
+   git add Backend/package-lock.json Backend/.gitignore
+   git commit -m "chore: versiona o package-lock.json do Backend"
+   ```
+   > **Ponto pedagógico:** o lockfile trava as versões **exatas** de todas as dependências. Sem ele, o CI instala "a versão mais nova compatível" — que pode ser diferente da que está na sua máquina, e os testes passam num lugar e quebram no outro.
+2. **`npm run test:coverage` precisa passar localmente.** Se o threshold da 8.3 estiver falhando, o CI vai falhar igual — resolva a tarefa da 8.4 primeiro (ou comece com thresholds menores e vá subindo).
+3. **Os testes de sistema precisam estar fora do `npm test`** (`testPathIgnorePatterns` da 8.3). O CI não tem servidor no ar.
+
 #### 8.5.1 Criando o workflow
 
-O GitHub Actions lê arquivos YAML dentro de `.github/workflows/`. Crie `Backend/.github/workflows/backend-ci.yml` (ou, se o repositório do Backend for a raiz do próprio Git, `​.github/workflows/backend-ci.yml`):
+O GitHub Actions **só** lê workflows da pasta `.github/workflows/` na **raiz do repositório** — uma pasta `.github` dentro de `Backend/` é ignorada. Neste projeto, a raiz é a pasta que contém `Backend/` e `Frontend/`, então crie `.github/workflows/backend-ci.yml`:
 
 ```yaml
 name: Backend CI
 
 on:
   push:
-    branches: ["main", "develop"]
-    paths: ["Backend/**"]
+    branches: ["master", "develop"]   # use o nome da SUA branch principal (neste repositório é "master")
+    paths: ["Backend/**", ".github/workflows/backend-ci.yml"]
   pull_request:
-    branches: ["main", "develop"]
-    paths: ["Backend/**"]
+    branches: ["master", "develop"]
+    paths: ["Backend/**", ".github/workflows/backend-ci.yml"]
 
 jobs:
   test:
@@ -1157,7 +1438,7 @@ jobs:
       - name: Configurar o Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20"            # a mesma versão do Dockerfile (node:20-alpine)
           cache: "npm"
           cache-dependency-path: Backend/package-lock.json
 
@@ -1176,6 +1457,7 @@ jobs:
           # nenhum dos dois depende do MongoDB Atlas real.
 
       - name: Publicar relatório de cobertura como artefato
+        if: always()                    # publica o relatório MESMO se o passo anterior falhar
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage-report
@@ -1183,26 +1465,63 @@ jobs:
 ```
 
 **Explicando linha a linha, para a aula:**
-- `on: push / pull_request` com `paths: ["Backend/**"]` → o workflow só roda quando algo dentro de `Backend/` muda (evita rodar testes de Backend por causa de um ajuste de CSS no Frontend).
+- `on: push / pull_request` com `paths` → o workflow só roda quando algo dentro de `Backend/` (ou o próprio workflow) muda — evita rodar testes de Backend por causa de um ajuste de CSS no Frontend.
+- `branches` → precisa bater com o nome real das branches do repositório. Se estiver `main` e o repositório usar `master`, o workflow **simplesmente nunca roda**, sem nenhum erro — um dos enganos mais comuns.
 - `actions/checkout@v4` → baixa o código do repositório dentro da máquina virtual do GitHub Actions.
-- `actions/setup-node@v4` com `cache: "npm"` → instala o Node na versão certa e **cacheia** o `node_modules` entre execuções, deixando o CI mais rápido.
+- `actions/setup-node@v4` com `cache: "npm"` → instala o Node na versão certa e **cacheia** os pacotes baixados entre execuções, deixando o CI mais rápido.
 - `npm ci` (não `npm install`) → instala exatamente as versões travadas no `package-lock.json`, sem surpresas. É o comando recomendado para ambientes de CI.
-- O `test:coverage` já falha o processo (`exit code` ≠ 0) se os `coverageThreshold` da Aula 8.3 não forem atingidos — e um `exit code` de erro faz o **GitHub Actions marcar o workflow como falho automaticamente**, sem nenhuma configuração extra.
-- `upload-artifact` guarda o relatório HTML de cobertura, para qualquer pessoa do time baixar e conferir depois, direto pela interface do GitHub.
+- O `test:coverage` já falha o processo (`exit code` ≠ 0) se os `coverageThreshold` da 8.3 não forem atingidos — e um `exit code` de erro faz o **GitHub Actions marcar o workflow como falho automaticamente**, sem nenhuma configuração extra.
+- `upload-artifact` com `if: always()` → guarda o relatório HTML de cobertura para qualquer pessoa do time baixar pela interface do GitHub. Sem o `if: always()`, o passo é pulado justamente quando a cobertura falha — que é quando mais precisamos ver o relatório.
+- Na primeira execução, o `mongodb-memory-server` baixa o binário do MongoDB (algumas dezenas de MB) — por isso o primeiro run é mais lento que os seguintes.
 
 #### 8.5.2 Protegendo a branch principal
 
-Mostre ao aluno, na interface do GitHub (**Settings → Branches → Branch protection rules**), como marcar o workflow `Backend CI` como **obrigatório** antes de permitir merge em `main`. Esse é o ponto em que "ter testes" vira, de fato, "ter qualidade garantida" — ninguém consegue mais integrar código que quebra os testes sem que o time perceba.
+Mostre ao aluno, na interface do GitHub (**Settings → Branches → Branch protection rules**, ou **Settings → Rules → Rulesets** na interface mais nova), como marcar o job `test` do workflow `Backend CI` como **status check obrigatório** antes de permitir merge na branch principal. Esse é o ponto em que "ter testes" vira, de fato, "ter qualidade garantida" — ninguém consegue mais integrar código que quebra os testes sem que o time perceba.
+
+> **Pegadinha:** o GitHub só lista um status check para ser marcado como obrigatório **depois que o workflow rodou pelo menos uma vez**. Faça um push primeiro, depois configure a proteção.
 
 #### 8.5.3 E os testes de Sistema e de Carga (Aulas 6 e 7)?
 
 Testes de sistema (Docker + Mongo real) e de carga (k6) são **lentos** e, no caso da carga, propositalmente **estressam** o servidor — não fazem sentido rodando em todo `push`. A prática comum do mercado:
 
 - Testes de **unidade** e **integração** → rodam no CI a **cada push/PR** (rápidos, baratos, bloqueiam o merge).
-- Testes de **sistema/E2E** → rodam no CI, mas só em pushes para `main`/`develop`, ou em um job separado, mais lento.
+- Testes de **sistema/E2E** → rodam no CI, mas só em pushes para a branch principal/`develop`, ou em um job separado, mais lento.
 - Testes de **carga** → rodam **agendados** (ex: toda madrugada) ou disparados manualmente antes de um lançamento importante, nunca a cada commit.
 
-Exemplo de workflow agendado para o teste de carga, `Backend/.github/workflows/backend-load-test.yml`:
+**Testes de sistema no CI** — acrescente um segundo job ao `backend-ci.yml` (no mesmo nível de `test:`). O runner do GitHub (`ubuntu-latest`) já vem com Docker instalado, então dá para reaproveitar o `docker-compose.test.yml` da Aula 6:
+
+```yaml
+  system:
+    needs: test                          # só roda se os testes rápidos passaram
+    if: github.event_name == 'push'      # em PR não roda; só depois do push na branch
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Backend/package-lock.json
+      - run: npm ci
+      - name: Subir o sistema (API + Mongo) com Docker
+        run: docker compose -f docker-compose.test.yml up -d --build
+      - name: Esperar a API responder
+        run: npx --yes wait-on http://localhost:4444/products/ --timeout 60000
+      - name: Rodar os testes de sistema
+        run: npm run test:system
+      - name: Mostrar logs do backend e derrubar o ambiente
+        if: always()
+        run: |
+          docker compose -f docker-compose.test.yml logs backend
+          docker compose -f docker-compose.test.yml down
+```
+
+> **Por que `wait-on` e não `sleep 5`?** O container leva um tempo variável para subir. `sleep 5` às vezes é pouco (teste falha "do nada") e às vezes é muito (CI mais lento à toa). O `wait-on` fica consultando a URL e segue assim que ela responde — é a solução "polling com timeout" da tarefa de casa da Aula 6.
+
+**Teste de carga agendado** — `.github/workflows/backend-load-test.yml`:
 
 ```yaml
 name: Backend Load Test (k6)
@@ -1215,25 +1534,48 @@ on:
 jobs:
   load-test:
     runs-on: ubuntu-latest
+    services:
+      mongo:                # MongoDB descartável, só para esta execução (regra de ouro da Aula 7.3)
+        image: mongo:7
+        ports:
+          - 27017:27017
+    defaults:
+      run:
+        working-directory: Backend
+    env:
+      PORT: 4444
+      JWT_SECRET: segredo-de-ci
+      dbUrl: mongodb://localhost:27017/mynds-carga
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Backend/package-lock.json
       - name: Instalar o k6
         uses: grafana/setup-k6-action@v1
       - name: Subir o Backend em segundo plano
-        working-directory: Backend
         run: |
           npm ci
-          npm run dev &
-          sleep 5
-        env:
-          JWT_SECRET: segredo-de-ci
-          dbUrl: ${{ secrets.MONGO_URL_STAGING }}
+          node src/server.js &
+          npx --yes wait-on http://localhost:4444/products/ --timeout 60000
       - name: Rodar o teste de carga
-        working-directory: Backend
-        run: k6 run load-tests/listar-produtos.js
+        run: k6 run --summary-export=resultado-carga.json load-tests/listar-produtos.js
+      - name: Guardar o resultado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultado-carga
+          path: Backend/resultado-carga.json
 ```
 
-> **Ponto pedagógico — `secrets`:** note o uso de `${{ secrets.MONGO_URL_STAGING }}`. Segredos (senhas, connection strings) **nunca** vão escritos direto no YAML — ficam guardados em **Settings → Secrets and variables → Actions** do repositório no GitHub, e são injetados como variável de ambiente só durante a execução.
+**Explicando para a aula:**
+- `services: mongo` sobe um MongoDB **só para esse job**, que é destruído no final — o teste de carga nunca encosta num banco real.
+- `node src/server.js &` e não `npm run dev`: o `dev` usa `nodemon`, que é feito para desenvolvimento (fica vigiando arquivos e reinicia o servidor). Em CI queremos o processo simples.
+- Se algum threshold do k6 falhar, o k6 sai com exit code ≠ 0 e o job fica **vermelho** — é o `check` × `threshold` da Aula 7.1 na prática.
+
+> **Ponto pedagógico — `secrets`:** aqui todos os valores são descartáveis (`segredo-de-ci`, Mongo do próprio job), então podem ficar no YAML. Mas se o teste de carga rodasse contra um ambiente de **staging** de verdade, a connection string e o `JWT_SECRET` reais **nunca** iriam escritos no arquivo: ficariam em **Settings → Secrets and variables → Actions** e seriam usados assim: `dbUrl: ${{ secrets.MONGO_URL_STAGING }}`. O GitHub injeta o valor só durante a execução e o esconde (`***`) nos logs.
 
 ### 8.6 Fechando o bloco Backend
 
@@ -1249,7 +1591,9 @@ CI/CD (Aula 8.5)     →  garante que tudo isso roda sozinho, a cada mudança
 ```
 
 ### Tarefa final do bloco Backend
-Rodar `npm run test:coverage` e entregar um relatório em texto: quais arquivos estão abaixo de 70% e qual teste (unidade ou integração) resolveria cada lacuna. Além disso, subir o workflow `backend-ci.yml` para um repositório no GitHub e anexar ao relatório o link (ou print) da execução do Actions passando.
+1. Rodar `npm run test:coverage` e entregar um relatório em texto: quais arquivos estão abaixo de 70%, qual teste (unidade ou integração) resolveria cada lacuna, e quais arquivos são **código morto** (e o que você decidiu fazer com eles — apagar ou excluir do coverage, justificando).
+2. Escrever os testes necessários até o `npm run test:coverage` **passar nos thresholds**.
+3. Subir o workflow `backend-ci.yml` para o GitHub e anexar ao relatório o link (ou print) da execução do Actions passando.
 
 ---
 
