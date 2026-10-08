@@ -1,0 +1,48 @@
+name: Backend CI
+
+on:
+  push:
+    branches: ["master", "douglas"]   # use o nome da SUA branch principal (neste repositório é "master")
+    paths: ["Backend/**", ".github/workflows/backend-ci.yml"]
+  pull_request:
+    branches: ["master", "douglas"]
+    paths: ["Backend/**", ".github/workflows/backend-ci.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+
+    steps:
+      - name: Baixar o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar o Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"            # a mesma versão do Dockerfile (node:20-alpine)
+          cache: "npm"
+          cache-dependency-path: Backend/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Rodar lint (se configurado)
+        run: npm run lint --if-present
+
+      - name: Rodar testes com cobertura
+        run: npm run test:coverage
+        env:
+          JWT_SECRET: segredo-de-ci
+          # dbUrl não é necessário aqui: os testes de unidade usam mocks (Aula 3)
+          # e os de integração sobem seu próprio MongoDB em memória (Aula 4) —
+          # nenhum dos dois depende do MongoDB Atlas real.
+
+      - name: Publicar relatório de cobertura como artefato
+        if: always()                    # publica o relatório MESMO se o passo anterior falhar
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-report
+          path: Backend/coverage/
