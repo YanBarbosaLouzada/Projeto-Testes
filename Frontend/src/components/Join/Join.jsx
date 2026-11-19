@@ -10,7 +10,7 @@ function Join({setSocket, setChatVisible}) {
     const username = usernameRef.current?.value
     if(!username?.trim()) return
     try {
-        const socket = io("http://localhost:8080/")
+        const socket = io(import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || "http://localhost:4444")
         socket.emit("set_username", username)
         setSocket(socket)
         setChatVisible(true)

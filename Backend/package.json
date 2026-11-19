@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "test": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
-    "test:watch": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
-    "test:system": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathIgnorePatterns=/node_modules/ system-tests"
+    "test": "cross-env NODE_ENV=test JWT_SECRET=test-only-jwt-secret-at-least-32-characters-123456789 node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:watch": "cross-env NODE_ENV=test JWT_SECRET=test-only-jwt-secret-at-least-32-characters-123456789 node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "cross-env NODE_ENV=test JWT_SECRET=test-only-jwt-secret-at-least-32-characters-123456789 node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:system": "cross-env NODE_ENV=test JWT_SECRET=test-only-jwt-secret-at-least-32-characters-123456789 node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --runTestsByPath system-testes/api.system.test.js --testPathIgnorePatterns=/node_modules/"
   },
   "keywords": [],
   "author": "Yan",
@@ -19,17 +19,23 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.5",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.1.0",
     "mongoose": "^9.2.3",
-    "nodemon": "^3.1.11",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "cross-env": "^10.1.0",
     "jest": "^30.4.2",
     "mongodb-memory-server": "^11.2.0",
+    "nodemon": "^3.1.14",
     "socket.io-client": "^4.8.3",
     "supertest": "^7.2.2"
+  },
+  "overrides": {
+    "glob": "14.0.2",
+    "minimatch": "11.0.1"
   }
 }

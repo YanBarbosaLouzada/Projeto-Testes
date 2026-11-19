@@ -1,4 +1,4 @@
-import { senhasConferem, validarIdade, validarEmail } from './UserValidators.js';
+import { senhasConferem, validarIdade, validarEmail, validarSenha } from './UserValidators.js';
 //IMPORTANTE: PARA GERAR OS TESTES DE SENHA ESTAMOS UTILIZANDO O Padrão AAA (Arrange, Act, Assert)
 describe('Testes de validação de usuário', () => {
     it("retorna true quando as senhas conferem", () => {
@@ -31,5 +31,12 @@ describe('Testes de validação de usuário', () => {
 
     it("retorna false quando o email é inválido", () => {
         expect(validarEmail("douglasdomatogrossogmail")).toBe(false);
+    });
+
+    it("requires long passwords with letters and numbers", () => {
+        expect(validarSenha("SenhaForte1234")).toBe(true);
+        expect(validarSenha("123456789012")).toBe(false);
+        expect(validarSenha("SomenteLetras")).toBe(false);
+        expect(validarSenha(undefined)).toBe(false);
     });
 });

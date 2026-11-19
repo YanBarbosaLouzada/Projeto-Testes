@@ -1,13 +1,12 @@
-import React, {useEffect} from "react";
+import React, { useEffect, useState } from "react";
 import "./ProductPage.css";
 import AddNewButton from "../../components/UI/AddNewButton/AddNewButton";
 import Modal from "../../components/Modal/Modal";
-import {useState} from "react";
-import axios from "axios";
 import Product from "../../components/Product/Product";
 import CategoryCard from "../../components/CategoryCard/CategoryCard";
 import { CATEGORY_LIST } from "../../fn-helpers/categories.jsx";
-import {useNavigate} from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import { api, getApiErrorMessage } from "../../services/api";
 
 
 function ProductPage() {
@@ -15,28 +14,47 @@ function ProductPage() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [products, setProducts] = useState([]);
   const [filter, setFilter] = useState("todos");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
   const navigate = useNavigate();
 
-  const pegarTodasAsProductsDaApi = () => {
-    axios
-      .get("http://localhost:4444/products/")
-      .then((res) => {
-        // console.log(res)
-        // console.log(res.data)
-        setProducts(res.data.products);
-      })
-      .catch((err) => console.log("erro ao pegar os dados da api", err));
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    api.get("/products/", {
+      params: {
+        page,
+        limit: 20,
+        ...(filter !== "todos" ? { type: filter } : {})
+      },
+      signal: controller.signal
+    }).then(({ data }) => {
+      setProducts((current) => page === 1 ? data.products : [...current, ...data.products]);
+      setHasMore(page < data.pagination.totalPages);
+      setTotalCount(data.pagination.total);
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        setErrorMessage(getApiErrorMessage(error, "Não foi possível carregar os produtos."));
+        setHasMore(false);
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [filter, page, retryCount]);
 
   const createProduct = async (name, mark, color, description, price, releaseDate, id, imageUrl, type) => {
-    const token = localStorage.getItem("token")
+    const token = localStorage.getItem("token");
     if (!token) {
-      alert("Você precisa estar logado para cadastrar produtos. Faça login.");
       navigate("/auth");
       return;
     }
-    await axios
-      .post("http://localhost:4444/products/create-product", {
+    try {
+      const { data } = await api.post("/products/create-product", {
         name,
         mark,
         color,
@@ -45,30 +63,29 @@ function ProductPage() {
         imageUrl: imageUrl || undefined,
         type: type || undefined,
         releaseDate: releaseDate || undefined,
-      }, { headers: { authorization: token } })
-      .then((res) => {
-        setProducts([...products, res.data.data]);
-      })
-      .catch((err) => console.log("erro ao pegar os dados da api", err));
+      });
+      setProducts((current) => [data.data, ...current]);
+      setTotalCount((count) => count + 1);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, "Não foi possível cadastrar o produto."));
+    }
   };
 
   const deleteProduct = async (id) => {
-    const token = localStorage.getItem("token")
-    await axios
-      .delete(`http://localhost:4444/products/delete-product/${id}`, { headers: { authorization: token } })
-      .then((res) => {
-        console.log(res)
-        // console.log(res.data)
-        setProducts(products.filter((n) => n._id !== id));
-        // pegarTodasAsProductsDaApi()
-      })
-      .catch((err) => console.log("erro ao pegar os dados da api", err));
+    try {
+      await api.delete(`/products/delete-product/${id}`);
+      setProducts((current) => current.filter((product) => product._id !== id));
+      setTotalCount((count) => Math.max(0, count - 1));
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, "Não foi possível excluir o produto."));
+    }
   };
 
-  const editProduct = (name, mark, color, description, price, releaseDate, id, imageUrl, type) => {
-    const token = localStorage.getItem("token")
-    axios
-      .put(`http://localhost:4444/products/edit-product`, {
+  const editProduct = async (name, mark, color, description, price, releaseDate, id, imageUrl, type) => {
+    try {
+      const { data } = await api.put("/products/edit-product", {
         name,
         mark,
         color,
@@ -78,36 +95,19 @@ function ProductPage() {
         type: type || undefined,
         releaseDate: releaseDate || undefined,
         _id: id,
-      }, { headers: { authorization: token } })
-      .then((res) => {
-        // console.log(res)
-        // console.log(res.data)
-        let newUpdatedProducts = products.map((n) => {
-          if (n._id === id) {
-            return res.data.updatedProduct;
-          }
-          return n;
-        });
-        setProducts(newUpdatedProducts);
-      })
-      .catch((err) => console.log("erro ao pegar os dados da api", err));
+      });
+      setProducts((current) => current.map((product) =>
+        product._id === id ? data.updatedProduct : product
+      ));
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, "Não foi possível editar o produto."));
+    }
   };
 
-  useEffect(() => {
-    pegarTodasAsProductsDaApi();
-    // editProduct(1,"batatadoce","editado")
-  }, []);
   const mudarModal = () => {
     setShowModal((state) => !state);
   };
-
-  // function fecharOModal(){
-  //   setShowModal(false)
-  // }
-  // function abrirOModal(){
-  //   setShowModal(true)
-  // }
-  const filteredProducts = filter === "todos" ? products: products.filter((p) => p.type === filter);
 
   return (
     <div className="product-page">
@@ -134,18 +134,39 @@ function ProductPage() {
             label={cat.label}
             accent={cat.accent}
             active={filter === cat.key}
-            count={cat.key === "todos" ? products.length : products.filter((p) => p.type === cat.key).length}
-            onClick={() => setFilter(cat.key)}
+            count={filter === cat.key ? totalCount : undefined}
+            onClick={() => {
+              if (filter !== cat.key) {
+                setProducts([]);
+                setPage(1);
+                setTotalCount(0);
+                setLoading(true);
+                setErrorMessage("");
+                setFilter(cat.key);
+              }
+            }}
           />
         ))}
       </div>
-      {filteredProducts.length === 0 ? (
+      {errorMessage && <p className="product-page-error" role="alert">{errorMessage}</p>}
+      {errorMessage && page === 1 && (
+        <button type="button" onClick={() => {
+          setLoading(true);
+          setErrorMessage("");
+          setRetryCount((count) => count + 1);
+        }}>
+          Tentar novamente
+        </button>
+      )}
+      {loading && page === 1 ? (
+        <p role="status">Carregando produtos...</p>
+      ) : products.length === 0 ? (
         <div className="product-page-empty">
           <p>Nenhum produto encontrado{filter !== "todos" ? ` para "${filter}"` : ""}.</p>
         </div>
       ) : (
         <div className="Productslist">
-          {filteredProducts.map((n) => (
+          {products.map((n) => (
             <Product
               key={n._id}
               {...n}
@@ -155,6 +176,14 @@ function ProductPage() {
             />
           ))}
         </div>
+      )}
+      {hasMore && (
+        <button type="button" onClick={() => {
+          setLoading(true);
+          setPage((current) => current + 1);
+        }} disabled={loading}>
+          {loading ? "Carregando..." : "Carregar mais"}
+        </button>
       )}
       <button
         className="support-button"

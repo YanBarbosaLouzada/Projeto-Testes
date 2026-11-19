@@ -1,9 +1,8 @@
-import {createBrowserRouter} from "react-router-dom";
+import React, { Suspense } from "react";
+import { createBrowserRouter } from "react-router-dom";
 import Layout from "./pages/Layout/Layout";
-import ProductPage from "./pages/ProductPage/ProductPage";
-import HomePage from "./pages/HomePage/HomePage";
-import AuthPage from "./pages/AuthPage/AuthPage";
-import ChatPage from "./pages/ChatPage/ChatPage";
+import { AuthPage, ChatPage, HomePage, ProductPage } from "./lazyRoutes";
+
 export const router = createBrowserRouter([
   {
     path: "/",
@@ -11,7 +10,7 @@ export const router = createBrowserRouter([
     children: [
       {
         path: "products",
-        element: <ProductPage />,
+        element: <Suspense fallback={<p role="status">Carregando página...</p>}><ProductPage /></Suspense>,
       },
       {
         path: "ex",
@@ -19,15 +18,15 @@ export const router = createBrowserRouter([
       },
       {
         path: "/",
-        element: <HomePage />,
+        element: <Suspense fallback={<p role="status">Carregando página...</p>}><HomePage /></Suspense>,
       },
       {
         path: "/auth",
-        element: <AuthPage />,
+        element: <Suspense fallback={<p role="status">Carregando página...</p>}><AuthPage /></Suspense>,
       },
       {
         path: "/chatpage",
-        element: <ChatPage />,
+        element: <Suspense fallback={<p role="status">Carregando página...</p>}><ChatPage /></Suspense>,
       },
     ],
   },

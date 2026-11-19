@@ -1,85 +1,93 @@
 import {User} from "../models/user.js"
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { senhasConferem, validarEmail, validarIdade } from "../validators/UserValidators.js";
+import { validarCadastroUsuario } from "../validators/UserValidators.js";
+import { getJwtSecret } from "../config/security.js";
+import { logError } from "../utils/logger.js";
 
 export default class UserController {
-  static async LoginUser(req,res){
-    const {email, password} = req.body;
+  static async LoginUser(req, res) {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    const password = req.body?.password;
 
     try{
-      const user = await User.findOne({email});
+      if (!email || typeof password !== "string") {
+        return res.status(400).json({ message: "Email e senha são obrigatórios." });
+      }
 
+      const user = await User.findOne({ email }).select("+password");
       if(!user){
-        return res.status(404).json({message:"Usuario nao encontrado no DB"})
+        return res.status(401).json({ message: "Credenciais inválidas." });
       }
 
       const pass = await bcrypt.compare(password, user.password);
 
       if (!pass){
-        return res.status(401).json({message:"Senha incorreta!"})
+        return res.status(401).json({ message: "Credenciais inválidas." });
       }
 
-      const token = jwt.sign({userId: user._id}, process.env.JWT_SECRET,{ expiresIn:"1h" })
+      const token = jwt.sign({ userId: user._id }, getJwtSecret(), {
+        expiresIn: "1h",
+        algorithm: "HS256"
+      });
 
-      return res.status(200).json({token})
+      return res.status(200).json({ token });
     }catch(error){
-      console.error("Erro ao fazer login:", error)
-      return res.status(500).json({error:"Error interno do servidor"})
+      logError("Login failed", error, { path: req.path });
+      return res.status(500).json({ message: "Erro interno do servidor." });
     }
   }
 
-  static async RegisterUser(req,res) {
-    const {name,age,email,password,confirmPassword} = req.body;
-
-    if (!senhasConferem(password, confirmPassword)){
-      return res.status(400).json({message:"As senhas são diferentes!"})
-    }
-    if(!validarEmail(email)){
-      return res.status(400).json({message:"Email inválido!"})
-    }
-    if(!validarIdade(age)){
-      return res.status(400).json({message:"Idade inválida!"})
+  static async RegisterUser(req, res) {
+    const validationError = validarCadastroUsuario(req.body ?? {});
+    if (validationError) {
+      return res.status(400).json({ message: validationError });
     }
 
     try{
-
-      const cryptPassword = await bcrypt.hash(password,10);
-
-
+      const { name, age, email, password } = req.body;
+      const cryptPassword = await bcrypt.hash(password, 12);
       const newUser = new User({
-        name,
-        age,
-        email,
+        name: name.trim(),
+        age: Number(age),
+        email: email.trim().toLowerCase(),
         password: cryptPassword
       });
 
       const createUser = await newUser.save()
-
+      const safeUser = createUser.toObject ? createUser.toObject() : { ...createUser };
+      delete safeUser.password;
       return res.status(200).json({
-        message:"Usuario criado com sucesso!",
-        data: createUser,
+        message: "Usuário criado com sucesso!",
+        data: safeUser,
       });
-
     }catch(error){
-      console.error("Error ao registrar usuario", error);
-      return res.status(500).json({error:"Erro interno do servidor"})
+      if (error?.code === 11000) {
+        return res.status(409).json({ message: "Já existe uma conta com este email." });
+      }
+      logError("Registration failed", error, { path: req.path });
+      return res.status(500).json({ message: "Erro interno do servidor." });
     }
   }
 
-  static async authenticateToken(req,res,next) {
-    const authHeader = req.headers["authorization"];
-
-    if(authHeader == null){
-      return res.status(401).json({message:"Sem token nao é permitido"})
+  static authenticateToken(req, res, next) {
+    const authorization = req.headers.authorization;
+    const match = typeof authorization === "string" && authorization.match(/^Bearer\s+(\S+)$/i);
+    if (!match) {
+      return res.status(401).json({ message: "Autenticação Bearer obrigatória." });
     }
 
-    jwt.verify(authHeader, process.env.JWT_SECRET, (err, user)=>{
-      if (err){
-        return res.status(403).json({message: "Token Inválido"});
-      }
-      req.user = user;
-      next();
-    })
+    try {
+      jwt.verify(match[1], getJwtSecret(), { algorithms: ["HS256"] }, (error, user) => {
+        if (error) {
+          return res.status(403).json({ message: "Token inválido ou expirado." });
+        }
+        req.user = user;
+        return next();
+      });
+    } catch (error) {
+      logError("Token verification setup failed", error, { path: req.path });
+      return res.status(500).json({ message: "Erro interno do servidor." });
+    }
   }
 }

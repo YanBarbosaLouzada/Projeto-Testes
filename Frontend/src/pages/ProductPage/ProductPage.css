@@ -35,6 +35,11 @@
   font-size: 15px;
 }
 
+.product-page-error {
+  padding: 12px 24px;
+  color: var(--danger);
+}
+
 .support-button {
   position: fixed;
   left: 24px;

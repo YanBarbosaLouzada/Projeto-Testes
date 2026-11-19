@@ -11,7 +11,7 @@ function Product(props) {
     <div className="product-card" style={{ "--cat-accent": category.accent }}>
       <div className="product-card-media">
         {props.imageUrl ? (
-          <img src={props.imageUrl} alt={props.name} />
+          <img src={props.imageUrl} alt={props.name} loading="lazy" />
         ) : (
           <div className="product-card-placeholder">{category.icon}</div>
         )}
