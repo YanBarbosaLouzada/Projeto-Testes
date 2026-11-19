@@ -7,13 +7,13 @@ export const options = {
 }
 
 export default function () {
-    const payload = JSON.stringify({ email: "carga@mynds.com", password: "123456" });
+    const payload = JSON.stringify({ email: "carga@mynds.com", password: "SenhaForte1234" });
     const headers = { headers: { "Content-Type": "application/json" } };
 
     const login = http.post("http://localhost:4444/auth/login",payload,headers);
 
     check(login,{
-        "login respondeu": (r) => r.status === 200 || r.status === 401 || r.status === 404 
+        "login respondeu": (r) => [200, 401, 404, 429].includes(r.status)
     })
 
     sleep(1);

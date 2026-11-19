@@ -24,6 +24,7 @@ export default function RegisterForm(props) {
           type="text"
           placeholder="Nome"
           required
+          maxLength={100}
           value={user.name}
           onChange={(e) => setUser({ ...user, name: e.target.value })}
         />
@@ -31,6 +32,7 @@ export default function RegisterForm(props) {
           type="email"
           placeholder="Email"
           required
+          maxLength={254}
           value={user.email}
           onChange={(e) => setUser({ ...user, email: e.target.value })}
         />
@@ -46,6 +48,8 @@ export default function RegisterForm(props) {
           type="password"
           placeholder="Senha"
           required
+          minLength={12}
+          autoComplete="new-password"
           value={user.password}
           onChange={(e) => setUser({ ...user, password: e.target.value })}
         />
@@ -53,6 +57,8 @@ export default function RegisterForm(props) {
           type="password"
           placeholder="Confirmar senha"
           required
+          minLength={12}
+          autoComplete="new-password"
           value={user.confirmPassword}
           onChange={(e) => setUser({ ...user, confirmPassword: e.target.value })}
         />

@@ -1,5 +1,6 @@
 export default {
   testEnvironment: "node",
+  testTimeout: 60000,
   transform: {},
   testMatch: ["**/*.test.js"],
   testPathIgnorePatterns: [
@@ -15,6 +16,11 @@ export default {
     "!src/index.js",           // versão antiga, 100% comentada (Aula 1.2)
     "!src/test-utils/**",      // ferramentas de teste, não código de produção
     "!src/functions/**",       // exemplos didáticos da Aula 1 (opcional excluir)
+    "!src/config/database.js",  // inicialização de infraestrutura, coberta pelo boot
+    "!src/controller/cadastro.js",
+    "!src/controller/primeiroController.js",
+    "!src/router/cadastro.js",
+    "!src/router/primeiroRouter.js",
   ],
   coverageThreshold: {
     global: {

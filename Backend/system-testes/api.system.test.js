@@ -20,19 +20,19 @@ describe("[Sistema] Fluxo de cadastro e listagem de produtos", () => {
 
         const registro = await chamarApi("/auth/register", {
             method: "POST",
-            body: JSON.stringify({ name: "Teste Sistema", age: 25, email, password: "123456", confirmPassword: "123456" }),
+            body: JSON.stringify({ name: "Teste Sistema", age: 25, email, password: "SenhaForte1234", confirmPassword: "SenhaForte1234" }),
         });
         expect(registro.status).toBe(200);
 
         const login = await chamarApi("/auth/login", {
             method: "POST",
-            body: JSON.stringify({ email, password: "123456" }),
+            body: JSON.stringify({ email, password: "SenhaForte1234" }),
         });
         expect(login.status).toBe(200);
 
         const criarProduto = await chamarApi("/products/create-product", {
             method: "POST",
-            headers: { authorization: login.corpo.token },
+            headers: { authorization: `Bearer ${login.corpo.token}` },
             body: JSON.stringify({ name: "Produto de Sistema", price: 10, type: "outros" }),
         });
         expect(criarProduto.status).toBe(200);

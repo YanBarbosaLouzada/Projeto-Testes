@@ -54,7 +54,7 @@ O projeto é dividido em **duas aplicações independentes**, que rodam em proce
 │                           │        login, cadastro)       │                            │
 │                           │                                │                            │
 │                           │        WebSocket (chat)        │  Socket.io                │
-│                           │◀──────────────────────────────▶│  http://localhost:8080    │
+│                           │◀──────────────────────────────▶│  http://localhost:4444    │
 └─────────────────────────┘                                └────────────┬─────────────┘
                                                                           │
                                                                           │ Mongoose (ODM)
@@ -65,17 +65,17 @@ O projeto é dividido em **duas aplicações independentes**, que rodam em proce
 ```
 
 - O **Frontend** é uma *Single Page Application* (SPA): o navegador carrega uma única página HTML e o React troca o conteúdo dinamicamente, sem recarregar a página, usando o React Router.
-- O **Backend** expõe uma **API REST** (endpoints HTTP que recebem/retornam JSON) e, separadamente, um **servidor de WebSocket** (Socket.io) só para o chat.
+- O **Backend** expõe uma **API REST** e o chat Socket.io no mesmo servidor HTTP.
 - O banco de dados é o **MongoDB**, um banco não-relacional (documentos em formato parecido com JSON), acessado através da biblioteca **Mongoose**.
 
-> **Por que duas portas diferentes no Backend (4444 e 8080)?** O código atual sobe o Express (API REST) na porta `4444` e o servidor de Socket.io na porta `8080`, dentro do mesmo arquivo (`Backend/src/index.js`). São dois servidores HTTP distintos rodando ao mesmo tempo no mesmo processo Node.
+O Express e o Socket.io compartilham um único servidor HTTP na porta `PORT` (padrão `4444`). `src/app.js` monta as rotas/middlewares; `src/server.js` valida a configuração, conecta ao MongoDB e inicia o servidor.
 
 ---
 
 ## 3. Estrutura de pastas
 
 ```
-Segunda/                          ← pasta raiz do projeto (workspace)
+Projeto-Testes/                   ← pasta raiz do projeto (workspace)
 ├── APOSTILA-TESTES.md            ← material didático de testes (16 aulas)
 ├── DOCUMENTACAO.md               ← este documento
 │
@@ -84,7 +84,8 @@ Segunda/                          ← pasta raiz do projeto (workspace)
 │   ├── .gitignore
 │   ├── package.json
 │   └── src/
-│       ├── index.js              ← ponto de entrada: cria o Express, o Socket.io e conecta o banco
+│       ├── app.js                ← configuração de segurança e rotas HTTP
+│       ├── server.js             ← inicializa DB, HTTP e Socket.io
 │       ├── config/
 │       │   └── database.js       ← conexão com o MongoDB via Mongoose
 │       ├── controller/           ← regras de negócio de cada recurso
@@ -196,7 +197,7 @@ git clone <URL-do-repositório>
 cd Segunda
 ```
 
-> Repare que este workspace contém **dois repositórios Git independentes**: um dentro de `Backend/` e outro dentro de `Frontend/`. Isso significa que, historicamente, cada parte foi versionada separadamente. Ao clonar, confirme com quem mantém o projeto qual é a URL correta de cada repositório (pode ser necessário clonar `Backend` e `Frontend` cada um com seu próprio `git clone`, dentro da pasta `Segunda/`).
+Este workspace é um único repositório Git com Backend e Frontend versionados juntos.
 
 ---
 
@@ -211,17 +212,20 @@ dbUrl = "mongodb+srv://<usuario>:<senha>@<seu-cluster>.mongodb.net/?appName=<nom
 PORT = 4444
 
 JWT_SECRET = "escolha-uma-chave-secreta-forte-aqui"
+CORS_ORIGINS = "http://localhost:5173"
 ```
 
 | Variável | O que é | Onde conseguir |
 |---|---|---|
 | `dbUrl` | String de conexão do MongoDB | No painel do MongoDB Atlas: **Connect → Drivers**, copie a *connection string* e troque `<usuario>`/`<senha>` pelos dados do seu banco |
 | `PORT` | Porta em que a API HTTP (Express) vai escutar | Pode manter `4444` (é a porta que o Frontend já espera, veja a seção 9) |
-| `JWT_SECRET` | Chave secreta usada para assinar e validar os tokens de login | Qualquer string longa e aleatória. **Nunca** compartilhe ou suba essa chave para o Git em produção |
+| `JWT_SECRET` | Chave secreta usada para assinar e validar os tokens de login | Use pelo menos 32 caracteres aleatórios (ex.: `openssl rand -hex 32`). A API não inicia sem ela. **Nunca** compartilhe ou suba essa chave |
+| `CORS_ORIGINS` | Origens autorizadas para a API e o chat | Lista separada por vírgula; por padrão `http://localhost:5173` e `http://127.0.0.1:5173` |
+| `AUTH_LOGIN_LIMIT` | Tentativas de login por IP em 15 minutos | Padrão `10`; aumente apenas em ambiente isolado de teste de carga. Em produção com várias instâncias, configure um rate-limit store compartilhado |
 
-> ⚠️ **Atenção de segurança**: o `.env` de exemplo encontrado durante o desenvolvimento deste projeto continha uma senha de banco e um `JWT_SECRET` fracos (`JWT_SECRET = 1`), usados apenas em ambiente local de estudo. Em qualquer ambiente real (produção), troque essas credenciais e use um `JWT_SECRET` longo e aleatório (por exemplo, gerado com `openssl rand -hex 32`).
+> Copie `Backend/.env.example` para `Backend/.env` e preencha as configurações. A senha de cadastro exige no mínimo 12 caracteres, letras e números.
 
-O Frontend, por padrão, não precisa de arquivo `.env` — ele já assume que a API está em `http://localhost:4444` e o chat em `http://localhost:8080` (essas URLs estão escritas diretamente no código, nas páginas `AuthPage.jsx`, `ProductPage.jsx` e `Join.jsx`).
+Copie `Frontend/.env.example` para `Frontend/.env.local` para configurar `VITE_API_URL` e `VITE_SOCKET_URL`. Ambas usam `http://localhost:4444` por padrão.
 
 ---
 
@@ -257,9 +261,8 @@ npm run dev
 Se tudo estiver certo, você verá no console algo como:
 
 ```
-Servidor socket rodando na porta 8080
-Servidor rodando na porta 4444
-Conectado com o mongoDB
+{"level":"info","message":"MongoDB connected"}
+{"level":"info","message":"API and chat server listening","port":4444}
 ```
 
 **Terminal 2 — Frontend:**
@@ -341,8 +344,7 @@ Respostas:
 
 Respostas:
 - `200 OK` → `{ "token": "<jwt>" }`
-- `404 Not Found` → e-mail não cadastrado
-- `401 Unauthorized` → senha incorreta
+- `401 Unauthorized` → credenciais inválidas
 
 ### 11.2 Produtos — `/products`
 
@@ -353,17 +355,20 @@ Respostas:
 | `PUT` | `/products/edit-product` | **Sim** | Edita um produto existente |
 | `DELETE` | `/products/delete-product/:id` | **Sim** | Remove um produto pelo id |
 
-**`GET /products/`** → `200 OK`:
+**`GET /products/?page=1&limit=20&type=masculino&search=camiseta`** → `200 OK`:
 
 ```json
 {
   "products": [
     { "_id": "...", "name": "Camiseta", "mark": "Mynds", "color": "Azul", "price": 59.9, "type": "masculino", "releaseDate": "2026-05-14T00:00:00.000Z" }
-  ]
+  ],
+  "pagination": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
 }
 ```
 
-**`POST /products/create-product`** — exige o header `authorization` com o token (veja a seção 13) e o corpo:
+Os parâmetros `page` e `limit` são opcionais (padrões `1` e `20`, limite máximo `100`); `type` e `search` também são opcionais.
+
+**`POST /products/create-product`** — exige `Authorization: Bearer <token>` e o corpo:
 
 ```json
 {
@@ -383,12 +388,12 @@ Respostas:
 
 ### 11.3 Rotas de exemplo/didáticas (não ativas)
 
-O código-fonte também contém dois conjuntos de rotas de exemplo, usados como material de estudo, que **não estão conectados** ao `Backend/src/index.js` atualmente (ou seja, não respondem a nenhuma requisição, mesmo com o servidor rodando):
+O código-fonte também contém dois conjuntos de rotas de exemplo, usados como material de estudo, que **não estão conectados** ao `Backend/src/app.js` (ou seja, não respondem a nenhuma requisição, mesmo com o servidor rodando):
 
 - `router/primeiroRouter.js` + `controller/primeiroController.js` — uma rota `GET /olamundo`, o exemplo mais simples possível de rota Express.
 - `router/cadastro.js` + `controller/cadastro.js` — um CRUD de usuário "de brinquedo", que apenas devolve mensagens fixas, sem tocar o banco de dados.
 
-Para ativá-las (por exemplo, em uma aula sobre Express), basta importar e registrar em `Backend/src/index.js`, do mesmo jeito que `productRouter` e `userRouter` já estão:
+Para ativá-las (por exemplo, em uma aula sobre Express), basta importar e registrar em `Backend/src/app.js`, do mesmo jeito que `productRouter` e `userRouter` já estão:
 
 ```js
 import primeiroRouter from './router/primeiroRouter.js';
@@ -435,22 +440,16 @@ app.use('/exemplo', primeiroRouter);
 1. O usuário se registra (`POST /auth/register`) — a senha é transformada em um **hash** com `bcrypt` antes de ser salva (isso significa que nem o próprio banco de dados guarda a senha original — só é possível *comparar* uma senha digitada com o hash salvo, nunca "descriptografar" de volta).
 2. O usuário faz login (`POST /auth/login`) — o Backend confere a senha com `bcrypt.compare` e, se estiver certa, gera um **token JWT** assinado com a chave `JWT_SECRET`, válido por 1 hora.
 3. O Frontend guarda esse token no `localStorage` do navegador (`AuthPage.jsx`).
-4. Em toda requisição que precisa de login (criar/editar/excluir produto), o Frontend envia o token no **header HTTP `authorization`**.
+4. Em toda requisição que precisa de login (criar/editar/excluir produto), o Frontend envia `Authorization: Bearer <token>`.
 5. O Backend usa o middleware `UserController.authenticateToken` para conferir esse token antes de deixar a requisição chegar ao controller de produtos.
 
-> **Detalhe importante para quem for integrar com este Backend**: diferente do padrão mais comum na web (`Authorization: Bearer <token>`), este projeto envia e espera o token **puro**, sem o prefixo `"Bearer "`:
->
-> ```
-> authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-> ```
->
-> Isso está assim tanto no Frontend (`headers: { authorization: token }`) quanto no Backend (`jwt.verify(authHeader, ...)`), então funciona — mas é uma particularidade deste projeto, não um padrão de mercado.
+O Backend aceita somente tokens JWT assinados com HS256; requisições sem token recebem `401`, e tokens inválidos/expirados recebem `403`. Login e cadastro têm limites de tentativas. Respostas de erro não incluem detalhes internos.
 
 ---
 
 ## 14. Chat em tempo real (Socket.io)
 
-- O servidor de Socket.io sobe junto com o Backend, na **porta 8080** (`Backend/src/index.js`).
+- O servidor de Socket.io sobe junto com a API, na porta definida por `PORT` (padrão `4444`).
 - O Frontend se conecta a ele em `Frontend/src/components/Join/Join.jsx`, usando `socket.io-client`.
 - Eventos usados:
   - `set_username` — o cliente informa o nome de exibição escolhido.
@@ -479,7 +478,7 @@ Todas as rotas são filhas de `Layout` (`Frontend/src/router.jsx`), que sempre d
 
 | Script | Comando | O que faz |
 |---|---|---|
-| `npm run dev` | `nodemon src/index.js` | Sobe o servidor em modo desenvolvimento, reiniciando a cada alteração de arquivo |
+| `npm run dev` | `nodemon src/server.js` | Sobe o servidor em modo desenvolvimento, reiniciando a cada alteração de arquivo |
 
 ### Frontend (`Frontend/package.json`)
 
@@ -490,7 +489,7 @@ Todas as rotas são filhas de `Layout` (`Frontend/src/router.jsx`), que sempre d
 | `npm run preview` | `vite preview` | Sobe um servidor local para testar o resultado do `build` |
 | `npm run lint` | `eslint .` | Roda o linter em todo o código-fonte do Frontend |
 
-> Os scripts de **teste** (`npm test`, `npm run test:coverage` etc.) são adicionados durante o curso descrito na [Apostila de Testes](./APOSTILA-TESTES.md) — o projeto, hoje, ainda não tem testes automatizados configurados.
+O Backend tem Jest + Supertest e o Frontend tem Vitest + Testing Library/MSW. Use `npm test`, `npm run test:coverage` e `npm run lint` dentro de cada aplicação.
 
 ---
 
@@ -516,18 +515,18 @@ O Backend não tem um linter configurado até o momento.
 
 | Sintoma | Causa provável | Como resolver |
 |---|---|---|
-| `Error: listen EADDRINUSE: address already in use :::8080` (ou `:::4444`) | Já existe um processo Node usando essa porta (ex: uma instância antiga do `npm run dev` ainda aberta) | Feche o processo antigo, ou descubra e finalize-o (no Windows: `Get-Process node` no PowerShell, depois `Stop-Process -Id <PID>`) |
+| `Error: listen EADDRINUSE: address already in use :::4444` | Já existe um processo Node usando a porta da API/chat (ex: outra instância do `npm run dev`) | Feche o processo antigo ou configure outra porta no `PORT` |
 | Tela de produtos em branco / erro no console `Network Error` | O Backend não está rodando, ou está em outra porta | Confira se `npm run dev` está ativo em `Backend/` e se a porta é `4444` |
-| `Erro ao conectar com o mongoDB` no console do Backend | `dbUrl` errada no `.env`, IP não liberado no MongoDB Atlas, ou sem internet | Revise o `.env` (seção 7); no Atlas, confirme em **Network Access** que seu IP está liberado |
-| Login sempre retorna "Senha incorreta" mesmo com a senha certa | `JWT_SECRET` foi alterado depois que tokens antigos foram emitidos, ou o hash da senha foi corrompido | Registre um novo usuário para testar; confirme que o `.env` não foi alterado no meio de uma sessão de testes |
-| CORS bloqueando requisições no navegador | Frontend rodando em uma porta diferente de `5173` (o Socket.io está configurado para aceitar só essa origem) | Rode o Frontend na porta padrão do Vite (`5173`), ou ajuste a configuração de CORS em `Backend/src/index.js` |
-| `npm install` falha por causa de versões | O `package-lock.json` do Backend não é versionado (está no `.gitignore`) — instalações em momentos diferentes podem trazer versões `minor`/`patch` diferentes das bibliotecas | Normalmente não é um problema, mas se algo quebrar de forma inesperada, compare a versão instalada com a exigida em `package.json` |
+| Erro de conexão MongoDB no log estruturado | `dbUrl` errada no `.env`, IP não liberado no MongoDB Atlas, ou sem internet | Revise o `.env` (seção 7); no Atlas, confirme em **Network Access** que seu IP está liberado |
+| Login sempre retorna "Credenciais inválidas" | A conta pode não existir ou a senha não corresponde; JWT_SECRET deve ter pelo menos 32 caracteres | Confirme o e-mail e registre uma nova conta se necessário; verifique a configuração local sem compartilhar o segredo |
+| CORS bloqueando requisições no navegador | Origem do Frontend não está em `CORS_ORIGINS` | Adicione a origem exata, separada por vírgula, em `Backend/.env` |
+| API não inicia por `JWT_SECRET` inválido | A chave está ausente ou tem menos de 32 caracteres | Gere uma chave aleatória com `openssl rand -hex 32` e guarde somente no `.env` |
 
 ---
 
 ## 19. Testes automatizados
 
-Este projeto **ainda não possui testes automatizados**. Existe, porém, um material didático completo — a **[Apostila de Testes (APOSTILA-TESTES.md)](./APOSTILA-TESTES.md)** — com 16 aulas passo a passo ensinando a implementar, dentro deste mesmo projeto:
+Este projeto inclui testes automatizados. A **[Apostila de Testes (APOSTILA-TESTES.md)](./APOSTILA-TESTES.md)** documenta os conceitos e práticas usados:
 
 - Testes de Unidade (Jest no Backend / Vitest no Frontend);
 - Testes de Integração (Supertest + MongoDB em memória / React Testing Library + MSW);
@@ -541,11 +540,8 @@ Este projeto **ainda não possui testes automatizados**. Existe, porém, um mate
 
 ## 20. Possíveis próximos passos
 
-Ideias de evolução para quem for continuar o projeto (não implementadas ainda):
+Ideias de evolução para quem for continuar o projeto:
 
-- Adicionar validação de e-mail duplicado no registro (hoje é possível criar dois usuários com o mesmo e-mail).
-- Separar `Backend/src/index.js` em `app.js` (monta o Express) e `server.js` (efetivamente sobe o servidor) — facilita testes automatizados (ver Aula 1 da apostila de testes).
-- Adicionar paginação na listagem de produtos.
 - Adicionar confirmação antes de excluir um produto na interface.
 - Criar salas (`rooms`) no chat, ao invés de uma conversa global única.
-- Configurar CI (Integração Contínua) rodando lint e testes automaticamente a cada `push`.
+- Usar cookies `HttpOnly` com proteção CSRF em vez de guardar JWT no `localStorage`, se a arquitetura de autenticação migrar para sessão por cookie.

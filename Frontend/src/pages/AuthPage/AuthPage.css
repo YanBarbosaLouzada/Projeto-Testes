@@ -36,10 +36,16 @@
 }
 
 .switch-text {
+  display: block;
+  width: 100%;
   margin-top: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   text-align: center;
   color: var(--accent);
   cursor: pointer;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 500;
   transition: color 0.2s ease;

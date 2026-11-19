@@ -21,6 +21,7 @@ export default function LoginForm(props) {
           type="email"
           placeholder="Email"
           required
+          autoComplete="username"
           value={user.email}
           onChange={(e) => setUser({ ...user, email: e.target.value })}
         />
@@ -28,6 +29,7 @@ export default function LoginForm(props) {
           type="password"
           placeholder="Senha"
           required
+          autoComplete="current-password"
           value={user.password}
           onChange={(e) => setUser({ ...user, password: e.target.value })}
         />

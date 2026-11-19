@@ -1,7 +1,3 @@
-//Escrever o teste de integração de POST /products/create-product sem enviar token e verificar 
-//que a API responde com o status de erro correto (dica: hoje o authenticateToken chama res.status(403)
-//quando o jwt.verify falha — investigue e documente o comportamento real).
-
 import request from 'supertest';
 import { app } from '../app.js';
 import { conectarBancoDeTeste, fecharBancoDeTeste, limparBancoDeTeste } from '../test-utils/setupTestDb.js';
@@ -10,25 +6,26 @@ beforeAll(async () => { await conectarBancoDeTeste(); });
 afterEach(async () => { await limparBancoDeTeste(); });
 afterAll(async () => { await fecharBancoDeTeste(); });
 
-async function criarUsuarioEPegarToken() {
-    await request(app).post("/auth/register").send({
-        name: "Lojista", age: 30, email: "lojista@mynds.com",
-        password: "123456", confirmPassword: "123456",
-    });
-    const login = await request(app).post("/auth/login").send({
-        email: "lojista@mynds.com", password: "123456",
-    });
-    return login.body.token;
-}
-
 describe("POST /products/create-product sem token", () => {
-    it("Deve retornar 403 Forbidden quando não há token", async () => {
-        const token = ""
+    it("retorna 401 quando não há token Bearer", async () => {
         const criar = await request(app)
             .post("/products/create-product")
-            .set("authorization", token)
-            .send({ name: "Camiseta", mark: "Mynds", color: "Azul", description: "Básica", price: 59.9, type: "masculino" });
-        expect(criar.status).toBe(403);
-        expect(criar.body.message).toBe("Token Inválido");
+            .send({})
+        expect(criar.status).toBe(401);
+        expect(criar.body.message).toBe("Autenticação Bearer obrigatória.");
+    });
+
+    it("returns a paginated empty catalogue", async () => {
+        const response = await request(app).get("/products/?page=1&limit=10");
+        expect(response.status).toBe(200);
+        expect(response.body.products).toEqual([]);
+        expect(response.body.pagination).toEqual({ page: 1, limit: 10, total: 0, totalPages: 0 });
+    });
+
+    it("rejects invalid pagination and category filters", async () => {
+        const invalidPage = await request(app).get("/products/?page=-1");
+        const invalidCategory = await request(app).get("/products/?type=admin");
+        expect(invalidPage.status).toBe(400);
+        expect(invalidCategory.status).toBe(400);
     });
 })

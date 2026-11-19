@@ -1,15 +1,15 @@
 import mongoose from "mongoose";
+import { logError } from "../utils/logger.js";
 
-export const connectDatabase = () => {
+export async function connectDatabase() {
     const dbUrl = process.env.dbUrl;
-    mongoose.connect(dbUrl);
+    if (!dbUrl) throw new Error("dbUrl must be configured before starting the API.");
     const connection = mongoose.connection;
 
-    connection.on("error", () => {
-        console.log("Erro ao conectar com o mongoDB");
-    });
+    connection.on("error", (error) => logError("MongoDB connection error", error));
 
     connection.on("open", () => {
-        console.log("Conectado com o mongoDB")
+        console.info(JSON.stringify({ level: "info", message: "MongoDB connected" }));
     });
+    await mongoose.connect(dbUrl);
 }

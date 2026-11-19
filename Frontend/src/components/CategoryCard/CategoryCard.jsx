@@ -11,7 +11,7 @@ function CategoryCard({ icon, label, count, active, accent, onClick }) {
     >
       <span className="category-card-icon">{icon}</span>
       <span className="category-card-label">{label}</span>
-      <span className="category-card-count">{count}</span>
+      {count !== undefined && <span className="category-card-count">{count}</span>}
     </button>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import "./AuthPage.css"
-import axios from "axios"
+import { api, getApiErrorMessage } from "../../services/api";
 import LoginForm from '../../components/LoginForm/LoginForm'
 import RegisterForm from '../../components/RegisterForm/RegisterForm'
 import { useNavigate } from 'react-router-dom'
@@ -17,7 +17,7 @@ function AuthPage() {
   async function registerHook(data) {
     setMessage(null)
     try {
-      const response = await axios.post("http://localhost:4444/auth/register", data)
+      const response = await api.post("/auth/register", data)
 
       if (response.status === 200) {
         setMessage({ type: "success", text: "Conta criada com sucesso! Faça login para continuar." })
@@ -25,10 +25,9 @@ function AuthPage() {
       }
 
     } catch (error) {
-      console.error(error)
       setMessage({
         type: "error",
-        text: error.response?.data?.message || "Não foi possível criar sua conta. Tente novamente.",
+        text: getApiErrorMessage(error, "Não foi possível criar sua conta. Tente novamente."),
       })
     }
   }
@@ -36,7 +35,7 @@ function AuthPage() {
   async function loginHook(data) {
     setMessage(null)
     try {
-      const response = await axios.post("http://localhost:4444/auth/login", data)
+      const response = await api.post("/auth/login", data)
 
       if (response.status === 200) {
         localStorage.setItem("token", response.data.token)
@@ -45,10 +44,9 @@ function AuthPage() {
       }
 
     } catch (error) {
-      console.error(error)
       setMessage({
         type: "error",
-        text: error.response?.data?.message || "Não foi possível entrar. Tente novamente.",
+        text: getApiErrorMessage(error, "Não foi possível entrar. Tente novamente."),
       })
     }
   }
@@ -57,21 +55,26 @@ function AuthPage() {
     <div className="auth-container">
       <div className="auth-card">
         {message && (
-          <div className={`auth-message auth-message-${message.type}`}>{message.text}</div>
+          <div
+            className={`auth-message auth-message-${message.type}`}
+            role={message.type === "error" ? "alert" : "status"}
+          >
+            {message.text}
+          </div>
         )}
         {registerPage ? (
           <div>
             <RegisterForm registerHook={registerHook} />
-            <p className="switch-text" onClick={() => switchPage(false)}>
+            <button type="button" className="switch-text" onClick={() => switchPage(false)}>
               Já tem conta? Ir para login
-            </p>
+            </button>
           </div>
         ) : (
           <div>
             <LoginForm loginHook={loginHook} />
-            <p className="switch-text" onClick={() => switchPage(true)}>
+            <button type="button" className="switch-text" onClick={() => switchPage(true)}>
               Não tem conta? Ir para registro
-            </p>
+            </button>
           </div>
         )}
       </div>

@@ -16,16 +16,39 @@ describe("Post /auth/register", () => {
                 name: "Aluno Teste",
                 age: 20,
                 email: "aluno@mynds.com",
-                password: "123456",
-                confirmPassword: "123456"
+                password: "SenhaForte1234",
+                confirmPassword: "SenhaForte1234"
             });
 
         expect(resposta.status).toBe(200);
-        expect(resposta.body.message).toBe("Usuario criado com sucesso!");
+        expect(resposta.body.message).toBe("Usuário criado com sucesso!");
         expect(resposta.body.data.email).toBe("aluno@mynds.com");
 
-        expect(resposta.body.data.password).not.toBe("123456"); // A senha deve ser criptografada e não deve ser igual à senha original
+        expect(resposta.body.data.password).toBeUndefined();
     })
+
+    it("rejeita senhas fracas e emails duplicados", async () => {
+        const fraco = await request(app).post("/auth/register").send({
+            name: "Aluno",
+            age: 20,
+            email: "fraco@mynds.com",
+            password: "123456",
+            confirmPassword: "123456"
+        });
+        expect(fraco.status).toBe(400);
+
+        const email = "duplicado@mynds.com";
+        const cadastro = {
+            name: "Aluno",
+            age: 20,
+            email,
+            password: "SenhaForte1234",
+            confirmPassword: "SenhaForte1234"
+        };
+        await request(app).post("/auth/register").send(cadastro);
+        const duplicado = await request(app).post("/auth/register").send(cadastro);
+        expect(duplicado.status).toBe(409);
+    });
 
     describe("Post /auth/login", () => {
         beforeEach(async () => {
@@ -35,8 +58,8 @@ describe("Post /auth/register", () => {
                     name: "Aluno Teste",
                     age: 20,
                     email: "login@mynds.com",
-                    password: "123456",
-                    confirmPassword: "123456"
+                    password: "SenhaForte1234",
+                    confirmPassword: "SenhaForte1234"
                 });
         });
 
@@ -45,7 +68,7 @@ describe("Post /auth/register", () => {
                 .post("/auth/login")
                 .send({
                     email: "login@mynds.com",
-                    password: "123456"
+                    password: "SenhaForte1234"
                 });
 
             expect(resposta.status).toBe(200);

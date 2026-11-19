@@ -12,7 +12,7 @@ Este material foi criado para ensinar, **na prática e dentro do projeto real My
 - Cobertura de Código (Coverage)
 - CI/CD (Integração e Entrega Contínua) — automatizando tudo isso a cada `push`
 
-> ⚠️ **Importante para o professor**: os exemplos de código aqui são para **serem digitados e explicados em aula**. O projeto ainda não tem as dependências de teste instaladas — isso faz parte da Aula 1 de cada bloco (Backend e Frontend). Não existem arquivos de teste prontos no repositório: essa é justamente a atividade que o aluno vai construir, aula após aula.
+> Os exemplos de código são material didático para explicar os conceitos. O repositório já inclui Jest/Supertest no Backend e Vitest/Testing Library/MSW no Frontend; rode os scripts das respectivas pastas para conferir a implementação atual.
 
 ---
 
@@ -124,7 +124,7 @@ Como o projeto usa `"type": "module"` (ES Modules), adicione em `Backend/package
 ```json
 {
   "scripts": {
-    "dev": "nodemon src/index.js",
+    "dev": "nodemon src/server.js",
     "test": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --runInBand",
     "test:watch": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --watch",
     "test:coverage": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --coverage"
@@ -147,11 +147,11 @@ export default {
 
 ### 1.2 Por que separar `app.js` de `server.js`?
 
-Hoje, `Backend/src/index.js` faz **tudo junto**: cria o `app`, registra rotas, **e já chama `app.listen(...)`**. Isso é um problema para testes: o Supertest não precisa (e não deveria) abrir uma porta real — ele conversa direto com o objeto `app` do Express.
+O `Backend/src/app.js` exporta o Express sem abrir uma porta; `Backend/src/server.js` configura o Socket.io e inicia a conexão com o banco e o servidor. O Supertest conversa diretamente com o objeto `app`, sem abrir uma porta real.
 
 **Refatoração didática (mostre a diferença ao aluno):**
 
-`Backend/src/app.js` (novo arquivo — só monta o app, não escuta porta nenhuma):
+`Backend/src/app.js` (monta as rotas e middlewares; em produção também configura segurança, CORS allowlist e erros):
 
 ```js
 import express from 'express';
@@ -184,7 +184,7 @@ import { Server } from 'socket.io';
 import { app } from './app.js';
 import { connectDatabase } from './config/database.js';
 
-const port = process.env.PORT || 8000;
+const port = process.env.PORT || 4444;
 const server = createServer(app);
 
 const serverSocket = new Server(server, {
@@ -198,9 +198,8 @@ serverSocket.on('connection', (socket) => {
   });
 });
 
-server.listen(8080, () => console.log('Servidor socket rodando na porta 8080'));
-app.listen(port, () => console.log(`Servidor rodando na porta ${port}`));
-connectDatabase();
+await connectDatabase();
+server.listen(port, () => console.log(`Servidor API/Socket.io rodando na porta ${port}`));
 ```
 
 E o `package.json` passa a rodar `"dev": "nodemon src/server.js"`.
@@ -353,7 +352,7 @@ Todo teste de unidade bem escrito segue essas 3 fases — mostre isso explicitam
 ```js
 it("retorna false quando as senhas são diferentes", () => {
   // Arrange (organizar): preparar os dados de entrada
-  const senha = "123456";
+  const senha = "SenhaForte1234";
   const confirmacao = "abcdef";
 
   // Act (agir): executar a função que queremos testar
@@ -418,19 +417,19 @@ describe("UserController.LoginUser", () => {
     jest.clearAllMocks();
   });
 
-  it("retorna 404 quando o usuário não existe", async () => {
-    User.findOne.mockResolvedValue(null);
+  it("retorna 401 quando o usuário não existe", async () => {
+    User.findOne.mockReturnValue({ select: jest.fn().mockResolvedValue(null) });
     const req = { body: { email: "naoexiste@mynds.com", password: "123" } };
     const res = criarResMock();
 
     await UserController.LoginUser(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith({ message: "Usuario nao encontrado no DB" });
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ message: "Credenciais inválidas." });
   });
 
   it("retorna 401 quando a senha está incorreta", async () => {
-    User.findOne.mockResolvedValue({ _id: "1", email: "a@a.com", password: "hash" });
+    User.findOne.mockReturnValue({ select: jest.fn().mockResolvedValue({ _id: "1", email: "a@a.com", password: "hash" }) });
     bcrypt.compare.mockResolvedValue(false);
     const req = { body: { email: "a@a.com", password: "errada" } };
     const res = criarResMock();
@@ -441,7 +440,7 @@ describe("UserController.LoginUser", () => {
   });
 
   it("retorna 200 e um token quando o login é válido", async () => {
-    User.findOne.mockResolvedValue({ _id: "1", email: "a@a.com", password: "hash" });
+    User.findOne.mockReturnValue({ select: jest.fn().mockResolvedValue({ _id: "1", email: "a@a.com", password: "hash" }) });
     bcrypt.compare.mockResolvedValue(true);
     jwt.sign.mockReturnValue("token-falso-123");
     const req = { body: { email: "a@a.com", password: "correta" } };
@@ -502,8 +501,8 @@ describe("UserController.authenticateToken", () => {
   });
 
   it("chama next() quando o token é válido", () => {
-    jwt.verify.mockImplementation((token, secret, cb) => cb(null, { userId: "1" }));
-    const req = { headers: { authorization: "token-valido" } };
+    jwt.verify.mockImplementation((token, secret, options, cb) => cb(null, { userId: "1" }));
+    const req = { headers: { authorization: "Bearer token-valido" } };
     const res = criarResMock();
     const next = jest.fn();
 
@@ -515,7 +514,7 @@ describe("UserController.authenticateToken", () => {
 });
 ```
 
-> **Discussão em aula:** repare que o `authenticateToken` do projeto espera o header `authorization` **sem** o prefixo `"Bearer "` — isso é diferente do padrão HTTP mais comum. É uma ótima oportunidade para discutir com o aluno como testes de unidade documentam o comportamento real do código, mesmo quando ele foge da convenção.
+> O middleware exige o formato padrão `Authorization: Bearer <token>` e só aceita JWT assinado com HS256. Sem token, responde `401`; token inválido ou expirado recebe `403`.
 
 ### Tarefa de casa da Aula 3
 Escrever os testes de unidade de `ProductController.createdProduct` e `ProductController.editProduct`, cobrindo o caminho feliz e o caso "produto não encontrado" do `editProduct`.
@@ -586,15 +585,15 @@ describe("POST /auth/register", () => {
         name: "Aluno Teste",
         age: 20,
         email: "aluno@mynds.com",
-        password: "123456",
-        confirmPassword: "123456",
+        password: "SenhaForte1234",
+        confirmPassword: "SenhaForte1234",
       });
 
     expect(resposta.status).toBe(200);
-    expect(resposta.body.message).toBe("Usuario criado com sucesso!");
+    expect(resposta.body.message).toBe("Usuário criado com sucesso!");
     expect(resposta.body.data.email).toBe("aluno@mynds.com");
     // a senha NUNCA deve voltar em texto puro na resposta
-    expect(resposta.body.data.password).not.toBe("123456");
+    expect(resposta.body.data.password).toBeUndefined();
   });
 
   it("retorna 400 quando as senhas não conferem", async () => {
@@ -604,7 +603,7 @@ describe("POST /auth/register", () => {
         name: "Aluno Teste",
         age: 20,
         email: "aluno2@mynds.com",
-        password: "123456",
+        password: "SenhaForte1234",
         confirmPassword: "diferente",
       });
 
@@ -618,15 +617,15 @@ describe("POST /auth/login", () => {
       name: "Aluno Teste",
       age: 20,
       email: "login@mynds.com",
-      password: "123456",
-      confirmPassword: "123456",
+      password: "SenhaForte1234",
+      confirmPassword: "SenhaForte1234",
     });
   });
 
   it("faz login com credenciais corretas e devolve um token JWT", async () => {
     const resposta = await request(app)
       .post("/auth/login")
-      .send({ email: "login@mynds.com", password: "123456" });
+      .send({ email: "login@mynds.com", password: "SenhaForte1234" });
 
     expect(resposta.status).toBe(200);
     expect(typeof resposta.body.token).toBe("string");
@@ -661,7 +660,7 @@ describe("GET /products/", () => {
 ```
 
 ### Tarefa de casa da Aula 4
-Escrever o teste de integração de `POST /products/create-product` **sem enviar token** e verificar que a API responde com o status de erro correto (dica: hoje o `authenticateToken` chama `res.status(403)` quando o `jwt.verify` falha — investigue e documente o comportamento real).
+Escrever o teste de integração de `POST /products/create-product` sem token e verificar `401`; enviar um token adulterado deve resultar em `403`.
 
 ---
 
@@ -686,10 +685,10 @@ afterAll(async () => await fecharBancoDeTeste());
 async function criarUsuarioEPegarToken() {
   await request(app).post("/auth/register").send({
     name: "Lojista", age: 30, email: "lojista@mynds.com",
-    password: "123456", confirmPassword: "123456",
+    password: "SenhaForte1234", confirmPassword: "SenhaForte1234",
   });
   const login = await request(app).post("/auth/login").send({
-    email: "lojista@mynds.com", password: "123456",
+    email: "lojista@mynds.com", password: "SenhaForte1234",
   });
   return login.body.token;
 }
@@ -701,7 +700,7 @@ describe("Fluxo completo de produto", () => {
     // 1. Criar
     const criar = await request(app)
       .post("/products/create-product")
-      .set("authorization", token)
+      .set("Authorization", `Bearer ${token}`)
       .send({ name: "Camiseta", mark: "Mynds", color: "Azul", description: "Básica", price: 59.9, type: "masculino" });
 
     expect(criar.status).toBe(200);
@@ -710,7 +709,7 @@ describe("Fluxo completo de produto", () => {
     // 2. Editar
     const editar = await request(app)
       .put("/products/edit-product")
-      .set("authorization", token)
+      .set("Authorization", `Bearer ${token}`)
       .send({ _id: produtoId, name: "Camiseta Premium", mark: "Mynds", color: "Azul", description: "Básica", price: 79.9, type: "masculino" });
 
     expect(editar.status).toBe(200);
@@ -719,7 +718,7 @@ describe("Fluxo completo de produto", () => {
     // 3. Deletar
     const deletar = await request(app)
       .delete(`/products/delete-product/${produtoId}`)
-      .set("authorization", token);
+      .set("Authorization", `Bearer ${token}`);
 
     expect(deletar.status).toBe(200);
 
@@ -742,7 +741,7 @@ describe("Fluxo completo de produto", () => {
 
 ### 5.2 Testando o Socket.io (chat)
 
-O chat roda num servidor HTTP separado (`server.js`, porta 8080). Para testar de forma integrada, precisamos subir esse servidor de verdade (numa porta de teste) e conectar um cliente `socket.io-client`.
+O Socket.io compartilha o servidor HTTP da API (porta `PORT`, padrão 4444). O teste de integração cria um servidor efêmero para exercitar cliente e servidor sem depender da porta de desenvolvimento.
 
 ```bash
 npm install --save-dev socket.io-client
@@ -821,7 +820,7 @@ Entender a diferença entre integração e sistema, e testar o Mynds **rodando d
 
 ### 6.2 Preparando um ambiente de sistema com Docker
 
-O serviço `backend` do Compose usa `build: .`, ou seja, ele espera encontrar um `Dockerfile` na raiz de `Backend/`. **Esse arquivo ainda não existe no projeto** — é a primeira coisa a criar nesta aula, senão o `docker compose up` falha com `failed to read dockerfile: open Dockerfile: no such file or directory`.
+O serviço `backend` do Compose usa `build: .`, ou seja, encontra o Dockerfile já versionado na raiz de `Backend/`. Confira que ele instala dependências de produção com `npm ci --omit=dev` e que as variáveis de teste usam um `JWT_SECRET` com pelo menos 32 caracteres.
 
 `Backend/Dockerfile`:
 
@@ -879,7 +878,7 @@ docker compose -f docker-compose.test.yml up -d
 
 ### 6.3 Escrevendo o teste de sistema
 
-Esses testes ficam **fora** da pasta `src`, porque não rodam junto com o resto — rodam contra um servidor já de pé. Crie `Backend/system-tests/api.system.test.js`:
+Esses testes ficam **fora** da pasta `src`, porque não rodam junto com o resto — rodam contra um servidor já de pé. Crie `Backend/system-testes/api.system.test.js`:
 
 ```js
 const BASE_URL = process.env.SYSTEM_BASE_URL || "http://localhost:4444";
@@ -904,19 +903,19 @@ describe("[Sistema] Fluxo de cadastro e listagem de produtos", () => {
 
     const registro = await chamarApi("/auth/register", {
       method: "POST",
-      body: JSON.stringify({ name: "Teste Sistema", age: 25, email, password: "123456", confirmPassword: "123456" }),
+      body: JSON.stringify({ name: "Teste Sistema", age: 25, email, password: "SenhaForte1234", confirmPassword: "SenhaForte1234" }),
     });
     expect(registro.status).toBe(200);
 
     const login = await chamarApi("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password: "123456" }),
+      body: JSON.stringify({ email, password: "SenhaForte1234" }),
     });
     expect(login.status).toBe(200);
 
     const criarProduto = await chamarApi("/products/create-product", {
       method: "POST",
-      headers: { authorization: login.corpo.token },
+      headers: { authorization: `Bearer ${login.corpo.token}` },
       body: JSON.stringify({ name: "Produto de Sistema", price: 10, type: "outros" }),
     });
     expect(criarProduto.status).toBe(200);
@@ -927,14 +926,14 @@ describe("[Sistema] Fluxo de cadastro e listagem de produtos", () => {
 Rodando (com o backend já de pé via Docker/`npm run dev`):
 
 ```bash
-npx jest system-tests --config '{"testEnvironment":"node"}'
+npx jest system-testes --config '{"testEnvironment":"node"}'
 ```
 
 ### 6.4 Checklist de teste de sistema (para discutir em aula)
 
 - [ ] As variáveis de ambiente (`.env`) usadas no teste são as de **teste/staging**, nunca produção.
 - [ ] O banco usado é isolado (não é o `myndscluster` do Atlas usado em desenvolvimento).
-- [ ] As portas (4444 API, 8080 socket, 5173 frontend) estão livres e configuradas.
+- [ ] As portas (4444 API + Socket.io, 5173 frontend) estão livres e configuradas.
 - [ ] Os logs do servidor foram observados durante o teste (erros silenciosos aparecem no console).
 - [ ] O teste falha claramente se o servidor não estiver no ar (timeout tratado).
 
@@ -1052,18 +1051,18 @@ export const options = {
 export function setup() {
   const email = `seed-${Date.now()}@mynds.com`;
   http.post(`${BASE_URL}/auth/register`, JSON.stringify({
-    name: "Seed Carga", age: 30, email, password: "123456", confirmPassword: "123456",
+    name: "Seed Carga", age: 30, email, password: "SenhaForte1234", confirmPassword: "SenhaForte1234",
   }), { headers: JSON_HEADERS });
 
   const login = http.post(`${BASE_URL}/auth/login`,
-    JSON.stringify({ email, password: "123456" }), { headers: JSON_HEADERS });
+    JSON.stringify({ email, password: "SenhaForte1234" }), { headers: JSON_HEADERS });
   const token = login.json("token");
 
   for (let i = 0; i < QTD_PRODUTOS; i++) {
     http.post(`${BASE_URL}/products/create-product`, JSON.stringify({
       name: `Produto ${i}`, mark: "Mynds", color: "Azul",
       description: "Gerado pelo setup do k6", price: 10 + i, type: "outros",
-    }), { headers: { ...JSON_HEADERS, authorization: token } });
+    }), { headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` } });
   }
 }
 
@@ -1127,13 +1126,13 @@ export const options = {
 export function setup() {
   const email = `carga-${Date.now()}@mynds.com`;
   const registro = http.post(`${BASE_URL}/auth/register`, JSON.stringify({
-    name: "Usuario Carga", age: 25, email, password: "123456", confirmPassword: "123456",
+    name: "Usuario Carga", age: 25, email, password: "SenhaForte1234", confirmPassword: "SenhaForte1234",
   }), { headers: JSON_HEADERS });
 
   if (registro.status !== 200) {
     throw new Error(`Não consegui criar o usuário de carga: ${registro.status} ${registro.body}`);
   }
-  return { email, password: "123456" };
+  return { email, password: "SenhaForte1234" };
 }
 
 export default function (data) {
@@ -1151,7 +1150,7 @@ export default function (data) {
   const criar = http.post(`${BASE_URL}/products/create-product`, JSON.stringify({
     name: `Produto VU${__VU}-${__ITER}`, price: 50, type: "outros",
   }), {
-    headers: { ...JSON_HEADERS, authorization: login.json("token") }, // sem "Bearer": é o que o authenticateToken espera
+    headers: { ...JSON_HEADERS, authorization: `Bearer ${login.json("token")}` },
     tags: { name: "criar-produto" },
   });
 
@@ -1166,8 +1165,8 @@ export default function (data) {
 **Pontos para explicar:**
 - **Dados preparados × dados gerados na hora:** o usuário é *preparado* no `setup()` (todos os VUs usam o mesmo login); os produtos são *gerados na hora* (`__VU` = número do VU, `__ITER` = número da iteração, garantindo nomes únicos).
 - O `check` agora exige **200**. Um check que aceita `200 || 401 || 404` passaria mesmo se o usuário não existisse — um teste que sempre passa não testa nada.
-- `authorization: token`, **sem** `Bearer`: o `authenticateToken` (`UserController.js`) passa o header inteiro direto para o `jwt.verify`.
-- **Por que o login tem uma meta mais folgada (800ms) que criar produto (300ms)?** O login roda `bcrypt.compare` com custo 10 — é **propositalmente lento** e pesado para a CPU (é isso que dificulta ataques de força bruta). Cada rota precisa da sua própria meta: um único `p(95)<300` para tudo reprovaria o login injustamente ou esconderia lentidão nas outras rotas. Rode o script e mostre ao aluno a diferença entre as duas linhas no resumo.
+- `Authorization: Bearer <token>`: esse é o padrão que o middleware de autenticação exige.
+- **Por que o login tem uma meta mais folgada (800ms) que criar produto (300ms)?** O login roda `bcrypt.compare` com custo 12 — é **propositalmente lento** e pesado para a CPU (é isso que dificulta ataques de força bruta). Há também uma janela de limite de tentativas por IP; ao medir carga de login, aumente `AUTH_LOGIN_LIMIT` somente no ambiente descartável de teste, nunca em produção.
 
 ### 7.6 Outros perfis de carga: estresse, pico e resistência
 
@@ -1289,7 +1288,7 @@ Adicione `coverage/` ao `Backend/.gitignore` — é um arquivo gerado, não vai 
 > Test Suites: 1 failed, 9 passed, 10 total
 > ```
 >
-> O `testMatch: ["**/*.test.js"]` pega **todos** os `.test.js` do projeto — inclusive `system-tests/api.system.test.js`, que precisa do servidor no ar (Aula 6). Os testes de sistema têm que ficar **fora** do `npm test`, senão o comando falha em qualquer máquina (e no CI) que não tenha o Docker de pé. Resolvemos isso na 8.3 com `testPathIgnorePatterns`.
+> O `testMatch: ["**/*.test.js"]` pega **todos** os `.test.js` do projeto — inclusive `system-testes/api.system.test.js`, que precisa do servidor no ar (Aula 6). Os testes de sistema ficam **fora** do `npm test`, senão o comando falha em qualquer máquina (e no CI) sem servidor.
 
 ### 8.3 Configurando o coverage e as metas mínimas (thresholds)
 
@@ -1302,7 +1301,7 @@ export default {
   testMatch: ["**/*.test.js"],
   testPathIgnorePatterns: [
     "/node_modules/",
-    "/system-tests/",          // testes de sistema rodam à parte, com o servidor no ar (Aula 6)
+    "/system-testes/",         // testes de sistema rodam à parte, com o servidor no ar (Aula 6)
   ],
   setupFiles: ["dotenv/config"],
   coverageProvider: "v8",      // mede a cobertura usando o próprio motor do Node (ver explicação abaixo)
@@ -1310,7 +1309,7 @@ export default {
     "src/**/*.js",
     "!src/**/*.test.js",       // o próprio teste não conta como código coberto
     "!src/server.js",          // não faz sentido medir cobertura do "boot" do servidor
-    "!src/index.js",           // versão antiga, 100% comentada (Aula 1.2)
+    "!src/index.js",           // arquivo legado sem uso no servidor atual
     "!src/test-utils/**",      // ferramentas de teste, não código de produção
     "!src/functions/**",       // exemplos didáticos da Aula 1 (opcional excluir)
   ],
@@ -1325,10 +1324,10 @@ export default {
 };
 ```
 
-E, em `package.json`, um script separado para os testes de sistema (a opção `--testPathIgnorePatterns` na linha de comando **substitui** a do config, liberando a pasta `system-tests/`):
+E, em `package.json`, um script separado para os testes de sistema (a opção `--testPathIgnorePatterns` na linha de comando **substitui** a do config, liberando a pasta `system-testes/`):
 
 ```json
-"test:system": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathIgnorePatterns=/node_modules/ system-tests"
+"test:system": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathIgnorePatterns=/node_modules/ system-testes"
 ```
 
 **Explicando as opções novas:**
@@ -1384,11 +1383,11 @@ Explique ao aluno:
 |---|---|---|
 | `UserController.js` 36-43 | as três validações do `RegisterUser` (senhas diferentes, e-mail inválido, idade inválida → 400) | unidade (Aula 3) ou integração (Aula 4) enviando cada dado inválido |
 | `UserController.js` 27-29 e 65-67 | os `catch` que devolvem 500 | unidade com mock fazendo `User.findOne`/`save` lançar erro (`mockRejectedValue`) |
-| `UserController.js` 81-82 | `jwt.verify` falhando → 403 "Token Inválido" | enviar um token adulterado |
+| `UserController.js` (middleware de autenticação) | token inválido/expirado → 403 | enviar um token adulterado |
 | `ProductController.js` 29-31 | o `if (!product)` do `editProduct` | "editar produto inexistente" — a tarefa de casa da Aula 5! |
 | `ProductController.js` (quase todo) | `getAllProducts`, `createdProduct`, `deleteProduct` | fluxo completo da Aula 5.1 ou testes de unidade com o mock de `Product` já pronto em `ProductController.test.js` |
 
-**E os arquivos com 0%?** `cadastro.js`, `primeiroController.js` e `primeiroRouter.js` são exemplos das primeiras aulas do projeto e **não estão ligados ao `app.js`** — nenhuma rota chega neles. É **código morto**. Isso só apareceu porque configuramos o `collectCoverageFrom`. A decisão certa aqui não é escrever testes para eles, e sim **apagá-los** (ou, se forem mantidos como material didático, excluí-los do coverage com `"!src/**/primeiro*.js"` e deixar isso documentado). Já o `config/database.js` é infraestrutura: quem o exercita são os testes de sistema da Aula 6 — é aceitável excluí-lo também, desde que o time saiba disso.
+**E os arquivos com 0%?** `cadastro.js`, `primeiroController.js` e `primeiroRouter.js` são exemplos didáticos e não estão ligados às rotas ativas. Como são material de aula, foram mantidos e excluídos do relatório de cobertura, com a justificativa registrada no `jest.config.js`. `config/database.js` é infraestrutura de inicialização e também fica fora da cobertura unitária.
 
 > **Discussão:** excluir arquivos do coverage é legítimo, mas pode virar "maquiagem" do número. Regra prática: só exclua o que for testado **de outro jeito** (sistema/E2E) ou o que **não é código de produção**, e sempre com um comentário explicando o porquê.
 
@@ -1451,7 +1450,7 @@ jobs:
       - name: Rodar testes com cobertura
         run: npm run test:coverage
         env:
-          JWT_SECRET: segredo-de-ci
+          JWT_SECRET: test-only-jwt-secret-at-least-32-characters-123456789
           # dbUrl não é necessário aqui: os testes de unidade usam mocks (Aula 3)
           # e os de integração sobem seu próprio MongoDB em memória (Aula 4) —
           # nenhum dos dois depende do MongoDB Atlas real.
@@ -1544,7 +1543,7 @@ jobs:
         working-directory: Backend
     env:
       PORT: 4444
-      JWT_SECRET: segredo-de-ci
+      JWT_SECRET: test-only-jwt-secret-at-least-32-characters-123456789
       dbUrl: mongodb://localhost:27017/mynds-carga
     steps:
       - uses: actions/checkout@v4
@@ -1575,7 +1574,7 @@ jobs:
 - `node src/server.js &` e não `npm run dev`: o `dev` usa `nodemon`, que é feito para desenvolvimento (fica vigiando arquivos e reinicia o servidor). Em CI queremos o processo simples.
 - Se algum threshold do k6 falhar, o k6 sai com exit code ≠ 0 e o job fica **vermelho** — é o `check` × `threshold` da Aula 7.1 na prática.
 
-> **Ponto pedagógico — `secrets`:** aqui todos os valores são descartáveis (`segredo-de-ci`, Mongo do próprio job), então podem ficar no YAML. Mas se o teste de carga rodasse contra um ambiente de **staging** de verdade, a connection string e o `JWT_SECRET` reais **nunca** iriam escritos no arquivo: ficariam em **Settings → Secrets and variables → Actions** e seriam usados assim: `dbUrl: ${{ secrets.MONGO_URL_STAGING }}`. O GitHub injeta o valor só durante a execução e o esconde (`***`) nos logs.
+> **Ponto pedagógico — `secrets`:** as credenciais de teste são descartáveis. Para qualquer ambiente de staging, connection strings e `JWT_SECRET` devem ficar em **Settings → Secrets and variables → Actions**, nunca escritos no workflow.
 
 ### 8.6 Fechando o bloco Backend
 
@@ -1941,16 +1940,16 @@ describe("RegisterForm", () => {
     await user.type(screen.getByPlaceholderText("Nome"), "Aluno Teste");
     await user.type(screen.getByPlaceholderText("Email"), "aluno@mynds.com");
     await user.type(screen.getByPlaceholderText("Idade"), "21");
-    await user.type(screen.getByPlaceholderText("Senha"), "123456");
-    await user.type(screen.getByPlaceholderText("Confirmar senha"), "123456");
+    await user.type(screen.getByPlaceholderText("Senha"), "SenhaForte1234");
+    await user.type(screen.getByPlaceholderText("Confirmar senha"), "SenhaForte1234");
     await user.click(screen.getByRole("button", { name: /registrar/i }));
 
     expect(aoRegistrar).toHaveBeenCalledWith({
       name: "Aluno Teste",
       email: "aluno@mynds.com",
       age: 21,
-      password: "123456",
-      confirmPassword: "123456",
+      password: "SenhaForte1234",
+      confirmPassword: "SenhaForte1234",
     });
   });
 });
@@ -2156,10 +2155,10 @@ Aqui usamos o MSW (Aula 12) para simular o backend de autenticação:
 ```js
 http.post("http://localhost:4444/auth/login", async ({ request }) => {
   const { email, password } = await request.json();
-  if (email === "aluno@mynds.com" && password === "123456") {
+  if (email === "aluno@mynds.com" && password === "SenhaForte1234") {
     return HttpResponse.json({ token: "token-de-teste" });
   }
-  return HttpResponse.json({ message: "Senha incorreta!" }, { status: 401 });
+  return HttpResponse.json({ message: "Credenciais inválidas." }, { status: 401 });
 }),
 ```
 
@@ -2184,7 +2183,7 @@ describe("AuthPage — login", () => {
     await user.type(screen.getByPlaceholderText("Senha"), "senhaerrada");
     await user.click(screen.getByRole("button", { name: /entrar/i }));
 
-    expect(await screen.findByText("Senha incorreta!")).toBeInTheDocument();
+    expect(await screen.findByText("Credenciais inválidas.")).toBeInTheDocument();
     expect(localStorage.getItem("token")).toBeNull();
   });
 
@@ -2194,7 +2193,7 @@ describe("AuthPage — login", () => {
 
     await user.click(screen.getByText(/já tem conta/i));
     await user.type(screen.getByPlaceholderText("Email"), "aluno@mynds.com");
-    await user.type(screen.getByPlaceholderText("Senha"), "123456");
+    await user.type(screen.getByPlaceholderText("Senha"), "SenhaForte1234");
     await user.click(screen.getByRole("button", { name: /entrar/i }));
 
     await waitFor(() => expect(localStorage.getItem("token")).toBe("token-de-teste"));
@@ -2305,15 +2304,15 @@ test.describe("Fluxo completo: registrar, logar, cadastrar e filtrar produto", (
     await page.getByPlaceholder("Nome").fill("Aluno E2E");
     await page.getByPlaceholder("Email").fill(email);
     await page.getByPlaceholder("Idade").fill("22");
-    await page.getByPlaceholder("Senha").fill("123456");
-    await page.getByPlaceholder("Confirmar senha").fill("123456");
+    await page.getByPlaceholder("Senha").fill("SenhaForte1234");
+    await page.getByPlaceholder("Confirmar senha").fill("SenhaForte1234");
     await page.getByRole("button", { name: "Registrar" }).click();
 
     await expect(page.getByText("Conta criada com sucesso!")).toBeVisible();
 
     // 2. Login (a tela já troca sozinha para login após o registro)
     const auth = new AuthPageObject(page);
-    await auth.logar(email, "123456");
+    await auth.logar(email, "SenhaForte1234");
 
     await expect(page).toHaveURL(/\/products$/);
 
@@ -2565,14 +2564,14 @@ Funcionalidade: Autenticação de usuário
   Para acessar a área de produtos
 
   Cenário: Login com credenciais válidas
-    Dado que possuo uma conta cadastrada com o e-mail "aluno@mynds.com" e senha "123456"
+    Dado que possuo uma conta cadastrada com o e-mail "aluno@mynds.com" e senha "SenhaForte1234"
     Quando eu faço login com esse e-mail e senha
     Então devo ser levado para a tela de produtos
 
   Cenário: Login com senha incorreta
-    Dado que possuo uma conta cadastrada com o e-mail "aluno@mynds.com" e senha "123456"
+    Dado que possuo uma conta cadastrada com o e-mail "aluno@mynds.com" e senha "SenhaForte1234"
     Quando eu faço login com esse e-mail e a senha "senha-errada"
-    Então devo ver a mensagem de erro "Senha incorreta!"
+    Então devo ver a mensagem de erro "Credenciais inválidas."
 ```
 
 ### 15.3 Conectando o Gherkin ao Playwright (`playwright-bdd`)
@@ -2789,7 +2788,7 @@ jobs:
           npx wait-on http://localhost:4444/products/
         env:
           dbUrl: mongodb://localhost:27017/mynds-e2e
-          JWT_SECRET: segredo-de-ci
+          JWT_SECRET: test-only-jwt-secret-at-least-32-characters-123456789
           PORT: 4444
 
       - name: Instalar e rodar o Frontend
